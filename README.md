@@ -1,7 +1,7 @@
 # Evidence MCP
 
 > **Verifiable evidence collection and validation MCP server for AI coding agents.**  
-> Replace unverified agent claims ("Tests pass", "Bug fixed") with tamper-evident, reproducible proof.
+> Replace unverified agent text claims ("Tests pass", "Bug fixed") with structured, verifiable local evidence.
 
 [![CI](https://github.com/mokashreef/Evidence-MCP/actions/workflows/ci.yml/badge.svg)](https://github.com/mokashreef/Evidence-MCP/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -24,7 +24,7 @@ In practice, agents may hallucinate command outputs, report results from outdate
 **Evidence MCP** introduces the **Evidence Bundle** pattern. Instead of trusting raw text claims, coding agents assemble a structured, machine-verifiable audit trail stored locally in the workspace:
 
 1. **Git State Capture:** Snapshots commit hashes, current branch, and clean status without mutating repository state.
-2. **Command Recording:** Logs exact commands, exit codes, stdout, and stderr from executions previously conducted by the agent.
+2. **Command Recording:** Logs exact commands, exit codes, stdout, and stderr from executions previously conducted by the agent, explicitly tagged with `provenance: 'agent_reported'`.
 3. **File Snapshots & Hashes:** Computes SHA-256 hashes and file byte sizes within strict workspace boundaries.
 4. **Substantiated Assertions:** Requires every claimed achievement to be backed by at least one valid evidence reference.
 5. **Freshness & Integrity Verification:** Allows reviewers or subsequent agents to re-evaluate the bundle against disk state. If any tracked file is modified or deleted, or if the Git branch/HEAD has moved, the bundle is instantly flagged as **`stale`** or **`failed`**.
@@ -33,15 +33,16 @@ In practice, agents may hallucinate command outputs, report results from outdate
 +-------------------------------------------------------------+
 |                     EVIDENCE BUNDLE                         |
 |  - Task: "Refactor total discount calculation"              |
-|  - Status: verified | stale | failed                        |
+|  - Status: verified | stale | failed | unverifiable         |
 +-------------------------------------------------------------+
          |                       |                     |
          v                       v                     v
   +--------------+       +---------------+      +--------------+
   |  Git State   |       | Command Logs  |      | File Hashes  |
-  |  - Branch    |       |  - Exit Code  |      |  - SHA-256   |
-  |  - HEAD SHA  |       |  - stdout     |      |  - File Size |
-  |  - Status    |       |  - stderr     |      |  - Path      |
+  |  - Branch    |       | (Agent-       |      |  - SHA-256   |
+  |  - HEAD SHA  |       |  Reported)    |      |  - File Size |
+  |  - Status    |       |  - Exit Code  |      |  - Path      |
+  | (Verified)   |       | (Unverified)  |      | (Verified)   |
   +--------------+       +---------------+      +--------------+
          \                       |                     /
           \                      |                    /
@@ -50,9 +51,26 @@ In practice, agents may hallucinate command outputs, report results from outdate
                                  v
                      +-----------------------+
                      | Assertions & Claims   |
-                     | (Must link to proofs) |
+                     | (Must link to proof)  |
                      +-----------------------+
 ```
+
+---
+
+## Trust Model & Verification Boundaries
+
+Evidence MCP establishes an explicit, honest trust boundary between what can and cannot be independently verified:
+
+| Evidence Type | Source | Verification Mechanism | Status during `verify_evidence_bundle` |
+|---|---|---|---|
+| **File Snapshots** | Local Filesystem | Recomputed SHA-256 hash and byte size against on-disk files | `verified`, `stale`, or `failed` |
+| **Git State** | Git Repository | Re-queried Git CLI for branch, HEAD commit, and working tree cleanliness | `verified`, `stale`, or `failed` |
+| **Command Execution** | Agent Input | Recorded as self-reported execution logs (`provenance: 'agent_reported'`) | `unverifiable` (acknowledged log, not verified) |
+
+### Assertion Verification Rules
+- **Independently Backed:** An assertion supported by at least one verified file snapshot or Git state receives `verified` status.
+- **Agent-Reported Only:** An assertion relying *exclusively* on command evidence is marked as `unverifiable`. It cannot receive `verified` status because the server does not execute or sandbox the command in v0.1.
+- **Integrity Invalidation:** If any supporting file is altered (`stale`) or removed (`failed`), the assertion is marked accordingly.
 
 ---
 
@@ -74,7 +92,7 @@ All data is stored locally in human-readable JSON files inside the workspace roo
 
 ---
 
-## Tools Catalog (v0.1)
+## Tools Catalog (v0.1.1)
 
 Evidence MCP provides seven focused tools through the Model Context Protocol:
 
@@ -82,10 +100,10 @@ Evidence MCP provides seven focused tools through the Model Context Protocol:
 |---|---|---|---|
 | `create_evidence_bundle` | Initializes a new evidence bundle for a task | `task`, `workspacePath`, `metadata?` | `bundleId`, initial status (`in_progress`) |
 | `capture_git_evidence` | Safely records Git HEAD, branch, and status | `bundleId`, `workspacePath?` | `evidenceId`, `branch`, `headCommit`, `isClean` |
-| `record_command_result` | Logs the result of a previously executed command | `bundleId`, `command`, `exitCode`, `stdout`, `stderr` | `evidenceId`, `command`, `exitCode` |
-| `snapshot_files` | Computes SHA-256 and size for target files | `bundleId`, `paths` | `snapshots: [{ evidenceId, path, sha256, sizeBytes }]` |
+| `record_command_result` | Logs agent-reported command execution result (provenance: agent_reported) | `bundleId`, `command`, `exitCode`, `stdout`, `stderr` | `evidenceId`, `command`, `exitCode`, `provenance` |
+| `snapshot_files` | Computes SHA-256 and size for regular files inside workspace | `bundleId`, `paths` | `snapshots: [{ evidenceId, path, sha256, sizeBytes }]` |
 | `add_assertion` | Attaches a claim linked to supporting evidence | `bundleId`, `claim`, `evidenceIds` (min 1) | `assertionId`, `claim`, `evidenceIds` |
-| `verify_evidence_bundle` | Validates file hashes and Git state against disk | `bundleId`, `workspacePath?` | `status` (`verified` \| `stale` \| `failed`), `items`, `reasons` |
+| `verify_evidence_bundle` | Validates file hashes and Git state against live workspace | `bundleId`, `workspacePath?` | `status` (`verified` \| `stale` \| `failed` \| `unverifiable`), `items`, `reasons` |
 | `export_evidence_report` | Generates a shareable Markdown or JSON report | `bundleId`, `format` (`markdown` \| `json`) | Formatted report ready for PR or handoff |
 
 ---
@@ -146,7 +164,7 @@ Here is how an agent interacts with Evidence MCP during a coding assignment:
   "stderr": ""
 }
 ```
-*Returns:* `{ "evidenceId": "cmd_43a0e991", "exitCode": 0 }`
+*Returns:* `{ "evidenceId": "cmd_43a0e991", "provenance": "agent_reported", "exitCode": 0 }`
 
 ### 5. Link Claims to Evidence
 ```json
@@ -157,7 +175,7 @@ Here is how an agent interacts with Evidence MCP during a coding assignment:
   "evidenceIds": ["file_81c4e101", "cmd_43a0e991", "git_7b2e11d0"]
 }
 ```
-*Notice: Submitting claims without supporting evidence IDs is strictly rejected.*
+*Notice: Submitting claims without supporting evidence IDs is strictly rejected. Claims backed only by command results will be marked as `unverifiable`.*
 
 ### 6. Verify Bundle Freshness
 ```json
@@ -170,7 +188,7 @@ Here is how an agent interacts with Evidence MCP during a coding assignment:
 ```json
 {
   "status": "verified",
-  "summary": "All 3 evidence items and assertions are verified and fresh.",
+  "summary": "All assertions are backed by independently verified evidence.",
   "reasons": [],
   "items": [...]
 }
@@ -192,6 +210,7 @@ Here is how an agent interacts with Evidence MCP during a coding assignment:
 
 - **Zero Telemetry & Tracking:** Evidence MCP contains no analytics, telemetry, or network calls.
 - **Strict Path Sandboxing:** Prevents path traversal (`../`) and verifies that every snapshotted file strictly resides within the declared `workspacePath`.
+- **Symlink Protection:** Resolves canonical real filesystem paths (`fs.realpathSync`) for both workspace and targets. In v0.1, symbolic links are explicitly rejected for file snapshots to prevent symlink traversal and confusion attacks.
 - **Sensitive File Blocklist:** Automatically blocks snapshotting of secret files:
   - Environment variables: `.env`, `.env.*` (e.g., `.env.local`, `.env.production`)
   - Private keys: `id_rsa`, `id_ed25519`, `*.pem`, `*.key`, `*.pfx`, `*.p12`
@@ -219,25 +238,12 @@ npm run build
 
 Add Evidence MCP to your client configuration file:
 
-#### Antigravity / Claude Desktop Configuration
 ```json
 {
   "mcpServers": {
     "evidence-mcp": {
       "command": "node",
       "args": ["/absolute/path/to/Evidence-MCP/dist/cli.js"]
-    }
-  }
-}
-```
-
-Or run directly with `npx` after linking:
-```json
-{
-  "mcpServers": {
-    "evidence-mcp": {
-      "command": "npx",
-      "args": ["-y", "evidence-mcp"]
     }
   }
 }
@@ -263,27 +269,28 @@ npm run build
 
 ---
 
-## Scope & Boundaries (v0.1)
+## Scope & Boundaries (v0.1.1)
 
-### Strictly In Scope for v0.1
+### Strictly In Scope for v0.1.1
 - Local file persistence under `.evidence-mcp/bundles/`.
 - Safe Git state capture (read-only).
-- Recording command outputs provided by the agent.
-- Workspace-confined SHA-256 file snapshots.
+- Recording command outputs provided by the agent (explicitly marked with `agent_reported` provenance).
+- Workspace-confined SHA-256 file snapshots (regular files only; symlinks rejected).
 - Mandatory evidence-linked assertions.
 - Live verification of file hashes and Git status.
+- Clear distinction between verified on-disk evidence and unverifiable agent logs.
 - Markdown and JSON report exporting.
 
-### Out of Scope for v0.1
-- **Direct Shell Command Execution:** In v0.1, `record_command_result` records results provided by agents. The server does not execute arbitrary shell strings from client inputs.
+### Out of Scope for v0.1.1
+- **Direct Shell Command Execution:** In v0.1.1, `record_command_result` records results provided by agents. The server does not execute arbitrary shell strings from client inputs.
 - **Remote Publishing / Cloud Syncing:** Evidence bundles are local to the workspace. There is no auto-pushing to remote cloud APIs or external issue trackers.
-- **Cryptographic Signatures (PKI):** Bundles rely on SHA-256 content hashes and Git commit trees; asymmetric GPG/Ed25519 bundle signing is reserved for v0.2.
+- **Cryptographic Signatures (PKI):** Bundles rely on SHA-256 content hashes and Git commit trees; asymmetric GPG/Ed25519 bundle signing is reserved for future versions.
 
 ---
 
 ## Roadmap
 
-- **v0.2:** Containerized sandbox execution runner for reproducible verification.
+- **v0.2:** Containerized sandbox execution runner for reproducible, server-verified command execution.
 - **v0.3:** Asymmetric cryptographic signatures for bundle author attestation.
 - **v0.4:** Multi-workspace support for cross-repository monorepo changes.
 - **v0.5:** Diff-level syntax tree (AST) evidence capturing.
