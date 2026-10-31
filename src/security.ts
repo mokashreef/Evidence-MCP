@@ -34,7 +34,11 @@ export function validateWorkspacePath(workspacePath: string): string {
     throw new Error(`Workspace path is not a directory: ${resolved}`);
   }
 
-  return resolved;
+  try {
+    return fs.realpathSync(resolved);
+  } catch {
+    return resolved;
+  }
 }
 
 /**
@@ -67,8 +71,9 @@ export interface SafeFilePathResult {
 /**
  * Verifies that a target file path:
  * 1. Has no null bytes
- * 2. Stays strictly inside the workspace (no path traversal)
- * 3. Does not target sensitive files (like .env or private keys)
+ * 2. Stays strictly inside the workspace boundary (both lexically and after canonical symlink resolution)
+ * 3. Does not use symbolic links (rejected in v0.1 for clear security boundary)
+ * 4. Does not target sensitive files (like .env, credentials, or private keys)
  */
 export function assertSafeFilePath(workspacePath: string, inputPath: string): SafeFilePathResult {
   if (!inputPath || typeof inputPath !== 'string' || inputPath.trim() === '') {
@@ -80,28 +85,84 @@ export function assertSafeFilePath(workspacePath: string, inputPath: string): Sa
   }
 
   const resolvedWorkspace = path.resolve(workspacePath);
+  let realWorkspace: string;
+  try {
+    realWorkspace = fs.realpathSync(resolvedWorkspace);
+  } catch {
+    realWorkspace = resolvedWorkspace;
+  }
+
   const resolvedTarget = path.resolve(resolvedWorkspace, inputPath);
 
-  // Path traversal check: target must be within workspace
-  const relative = path.relative(resolvedWorkspace, resolvedTarget);
-  const isOutside = relative.startsWith('..') || path.isAbsolute(relative);
+  // 1. Lexical path traversal check: target must be lexically within workspace
+  const relativeLexical = path.relative(resolvedWorkspace, resolvedTarget);
+  const isLexicalOutside = relativeLexical.startsWith('..') || path.isAbsolute(relativeLexical);
 
-  if (isOutside) {
+  if (isLexicalOutside) {
     throw new Error(
       `Path traversal rejected: "${inputPath}" resolves outside workspace boundary "${resolvedWorkspace}".`
     );
   }
 
-  // Check against sensitive file patterns using both relative path and basename
-  const normalizedRelative = relative.replace(/\\/g, '/');
-  if (isSensitivePath(normalizedRelative)) {
+  // 2. Upfront check for sensitive patterns on lexical path
+  const normalizedLexical = relativeLexical.replace(/\\/g, '/');
+  if (isSensitivePath(normalizedLexical)) {
     throw new Error(
-      `Access to sensitive file blocked: "${normalizedRelative}" matches restricted credential/secret patterns.`
+      `Access to sensitive file blocked: "${inputPath}" matches restricted credential/secret patterns.`
+    );
+  }
+
+  // 3. Reject symbolic links in v0.1 for clear security boundary
+  try {
+    const lstat = fs.lstatSync(resolvedTarget);
+    if (lstat.isSymbolicLink()) {
+      let targetReal = '';
+      try {
+        targetReal = fs.realpathSync(resolvedTarget);
+      } catch {
+        // broken symlink
+      }
+      throw new Error(
+        `Symbolic links are rejected in v0.1 for file snapshots: "${inputPath}" is a symbolic link${
+          targetReal ? ` pointing to "${targetReal}"` : ''
+        }.`
+      );
+    }
+  } catch (err: unknown) {
+    if (err instanceof Error && err.message.includes('Symbolic links are rejected in v0.1')) {
+      throw err;
+    }
+    // If file does not exist, realpathSync below will throw appropriate error
+  }
+
+  // 4. Resolve canonical filesystem realpath (resolves any intermediate directory symlinks)
+  let realTarget: string;
+  try {
+    realTarget = fs.realpathSync(resolvedTarget);
+  } catch {
+    throw new Error(`File does not exist or cannot be resolved: ${resolvedTarget}`);
+  }
+
+  // 5. Verify canonical path stays strictly inside canonical workspace
+  const relativeReal = path.relative(realWorkspace, realTarget);
+  const isRealOutside = relativeReal.startsWith('..') || path.isAbsolute(relativeReal);
+
+  if (isRealOutside) {
+    throw new Error(
+      `Symlink escape rejected: "${inputPath}" resolves outside workspace boundary "${realWorkspace}" to "${realTarget}".`
+    );
+  }
+
+  // 6. Check against sensitive file patterns on real canonical path as well
+  const normalizedReal = relativeReal.replace(/\\/g, '/');
+  if (isSensitivePath(normalizedReal) || isSensitivePath(realTarget)) {
+    throw new Error(
+      `Access to sensitive file blocked: "${inputPath}" matches restricted credential/secret patterns.`
     );
   }
 
   return {
-    absolutePath: resolvedTarget,
-    relativePath: normalizedRelative,
+    absolutePath: realTarget,
+    relativePath: normalizedReal,
   };
 }

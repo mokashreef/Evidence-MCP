@@ -18,7 +18,7 @@ describe('Security & Path Confinement', () => {
   describe('validateWorkspacePath', () => {
     it('accepts valid existing workspace directory', () => {
       const validated = validateWorkspacePath(tempWorkspace);
-      expect(validated).toBe(path.resolve(tempWorkspace));
+      expect(validated).toBe(fs.realpathSync(tempWorkspace));
     });
 
     it('rejects non-existent directory', () => {
@@ -45,7 +45,7 @@ describe('Security & Path Confinement', () => {
       await fs.promises.writeFile(target, 'console.log(1);');
 
       const result = assertSafeFilePath(tempWorkspace, 'src/index.ts');
-      expect(result.absolutePath).toBe(path.resolve(target));
+      expect(result.absolutePath).toBe(fs.realpathSync(target));
       expect(result.relativePath).toBe('src/index.ts');
     });
 
@@ -100,6 +100,68 @@ describe('Security & Path Confinement', () => {
       expect(isSensitivePath('src/index.ts')).toBe(false);
       expect(isSensitivePath('README.md')).toBe(false);
       expect(isSensitivePath('.env.example')).toBe(false);
+    });
+  });
+
+  describe('Symbolic Link Escapes Prevention', () => {
+    it('allows a normal internal file continuing to work', async () => {
+      const normalFile = path.join(tempWorkspace, 'app.ts');
+      await fs.promises.writeFile(normalFile, 'export const ready = true;\n', 'utf8');
+
+      const result = assertSafeFilePath(tempWorkspace, 'app.ts');
+      expect(result.relativePath).toBe('app.ts');
+      expect(result.absolutePath).toBe(fs.realpathSync(normalFile));
+    });
+
+    it('rejects a symlink inside the workspace pointing outside it', async () => {
+      const outsideDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'evidence-mcp-out-'));
+      const outsideFile = path.join(outsideDir, 'external.txt');
+      await fs.promises.writeFile(outsideFile, 'external secret data');
+
+      const linkPath = path.join(tempWorkspace, 'link_outside.txt');
+      let symlinkCreated = false;
+
+      try {
+        await fs.promises.symlink(outsideFile, linkPath);
+        symlinkCreated = true;
+      } catch (err: unknown) {
+        const error = err as { code?: string };
+        // On Windows without Developer Mode, creating symlinks may fail with EPERM/EACCES
+        console.warn(`[SKIP] Symlink creation denied by OS (${error.code}). Skipping symlink check.`);
+      }
+
+      if (symlinkCreated) {
+        expect(() => assertSafeFilePath(tempWorkspace, 'link_outside.txt')).toThrow(
+          /Symbolic links are rejected|Symlink escape rejected/
+        );
+      }
+
+      await fs.promises.rm(outsideDir, { recursive: true, force: true });
+    });
+
+    it('rejects a symlink pointing to a sensitive external file', async () => {
+      const outsideDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'evidence-mcp-env-out-'));
+      const sensitiveFile = path.join(outsideDir, '.env');
+      await fs.promises.writeFile(sensitiveFile, 'DATABASE_URL=postgres://...');
+
+      const linkPath = path.join(tempWorkspace, 'link_to_env.txt');
+      let symlinkCreated = false;
+
+      try {
+        await fs.promises.symlink(sensitiveFile, linkPath);
+        symlinkCreated = true;
+      } catch (err: unknown) {
+        const error = err as { code?: string };
+        console.warn(`[SKIP] Symlink creation denied by OS (${error.code}). Skipping symlink check.`);
+      }
+
+      if (symlinkCreated) {
+        expect(() => assertSafeFilePath(tempWorkspace, 'link_to_env.txt')).toThrow(
+          /Symbolic links are rejected|sensitive file blocked|Symlink escape rejected/
+        );
+      }
+
+      await fs.promises.rm(outsideDir, { recursive: true, force: true });
     });
   });
 });
