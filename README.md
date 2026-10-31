@@ -51,7 +51,7 @@ In practice, agents may hallucinate command outputs, report results from outdate
                                  v
                      +-----------------------+
                      | Assertions & Claims   |
-                     | (Must link to proof)  |
+                     | (Evidence links)      |
                      +-----------------------+
 ```
 
@@ -92,7 +92,7 @@ All data is stored locally in human-readable JSON files inside the workspace roo
 
 ---
 
-## Tools Catalog (v0.1.1)
+## Tools Catalog (v0.1.2)
 
 Evidence MCP provides seven focused tools through the Model Context Protocol:
 
@@ -210,7 +210,7 @@ Here is how an agent interacts with Evidence MCP during a coding assignment:
 
 - **Zero Telemetry & Tracking:** Evidence MCP contains no analytics, telemetry, or network calls.
 - **Strict Path Sandboxing:** Prevents path traversal (`../`) and verifies that every snapshotted file strictly resides within the declared `workspacePath`.
-- **Symlink Protection:** Resolves canonical real filesystem paths (`fs.realpathSync`) for both workspace and targets. In v0.1, symbolic links are explicitly rejected for file snapshots to prevent symlink traversal and confusion attacks.
+- **Symlink Protection & Boundary Re-evaluation:** Resolves canonical real filesystem paths (`fs.realpathSync`) for both workspace and targets. In v0.1, symbolic links are explicitly rejected for file snapshots. This security boundary is strictly re-evaluated during `verify_evidence_bundle`, immediately failing any file that was replaced by a symlink or moved outside the workspace after capture without reading or hashing the target.
 - **Sensitive File Blocklist:** Automatically blocks snapshotting of secret files:
   - Environment variables: `.env`, `.env.*` (e.g., `.env.local`, `.env.production`)
   - Private keys: `id_rsa`, `id_ed25519`, `*.pem`, `*.key`, `*.pfx`, `*.p12`
@@ -269,9 +269,9 @@ npm run build
 
 ---
 
-## Scope & Boundaries (v0.1.1)
+## Scope & Boundaries (v0.1.2)
 
-### Strictly In Scope for v0.1.1
+### Strictly In Scope for v0.1.2
 - Local file persistence under `.evidence-mcp/bundles/`.
 - Safe Git state capture (read-only).
 - Recording command outputs provided by the agent (explicitly marked with `agent_reported` provenance).

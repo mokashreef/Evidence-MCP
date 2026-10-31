@@ -22,7 +22,7 @@ import { exportEvidenceReport } from './reporter.js';
 export function createEvidenceServer(): McpServer {
   const server = new McpServer({
     name: 'evidence-mcp',
-    version: '0.1.1',
+    version: '0.1.2',
   });
 
   // 1. create_evidence_bundle

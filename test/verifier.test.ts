@@ -340,4 +340,141 @@ describe('Evidence Verification Engine', () => {
     expect(secondCheck.status).toBe('stale');
     expect(secondCheck.reasons.some((r) => r.includes('HEAD commit moved'))).toBe(true);
   });
+
+  describe('Post-capture Symlink Replacement Security Regressions', () => {
+    it('fails verification safely if an initially snapshotted file is replaced with a symlink to an external file', async () => {
+      const outsideDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'evidence-out-'));
+      const outsideFile = path.join(outsideDir, 'external.txt');
+      await fs.promises.writeFile(outsideFile, 'external sensitive content', 'utf8');
+
+      const insideFile = path.join(tempWorkspace, 'config.json');
+      await fs.promises.writeFile(insideFile, '{"setting": true}', 'utf8');
+      const hashInfo = await computeFileSha256AndSize(insideFile);
+
+      const bundle: EvidenceBundle = {
+        id: 'bundle_symlink_external_regression',
+        task: 'Symlink replacement regression test',
+        workspacePath: tempWorkspace,
+        status: 'in_progress',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        evidence: {
+          fileSnapshots: [
+            {
+              id: 'file_config',
+              type: 'file_snapshot',
+              capturedAt: new Date().toISOString(),
+              path: 'config.json',
+              absolutePath: insideFile,
+              sha256: hashInfo.sha256,
+              sizeBytes: hashInfo.sizeBytes,
+            },
+          ],
+        },
+        assertions: [
+          {
+            id: 'assert_cfg',
+            claim: 'Config file is valid',
+            evidenceIds: ['file_config'],
+            createdAt: new Date().toISOString(),
+          },
+        ],
+      };
+      await saveBundle(bundle);
+
+      // Initial check must succeed
+      const initialCheck = await verifyEvidenceBundle(bundle);
+      expect(initialCheck.status).toBe('verified');
+
+      // Replace normal internal file with a symlink pointing to external file
+      await fs.promises.unlink(insideFile);
+      let symlinkCreated = false;
+      try {
+        await fs.promises.symlink(outsideFile, insideFile);
+        symlinkCreated = true;
+      } catch (err: unknown) {
+        const error = err as { code?: string };
+        console.warn(`[SKIP] Symlink creation denied by OS (${error.code}). Skipping symlink check.`);
+      }
+
+      if (symlinkCreated) {
+        // Re-verify bundle: must fail safely without reading or hashing external target
+        const verifyResult = await verifyEvidenceBundle(bundle);
+        expect(verifyResult.status).toBe('failed');
+        const item = verifyResult.items.find((i) => i.id === 'file_config');
+        expect(item?.status).toBe('failed');
+        expect(item?.details).toMatch(/Security boundary violation/i);
+        expect(verifyResult.reasons.some((r) => r.includes('Security violation on "config.json"'))).toBe(true);
+      }
+
+      await fs.promises.rm(outsideDir, { recursive: true, force: true });
+    });
+
+    it('fails verification safely if an initially snapshotted file is replaced with a symlink to a sensitive file', async () => {
+      const outsideDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'evidence-env-out-'));
+      const sensitiveFile = path.join(outsideDir, '.env');
+      await fs.promises.writeFile(sensitiveFile, 'DATABASE_URL=postgres://secret', 'utf8');
+
+      const insideFile = path.join(tempWorkspace, 'service-token.txt');
+      await fs.promises.writeFile(insideFile, 'normal token', 'utf8');
+      const hashInfo = await computeFileSha256AndSize(insideFile);
+
+      const bundle: EvidenceBundle = {
+        id: 'bundle_symlink_sensitive_regression',
+        task: 'Symlink to sensitive file regression test',
+        workspacePath: tempWorkspace,
+        status: 'in_progress',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        evidence: {
+          fileSnapshots: [
+            {
+              id: 'file_token',
+              type: 'file_snapshot',
+              capturedAt: new Date().toISOString(),
+              path: 'service-token.txt',
+              absolutePath: insideFile,
+              sha256: hashInfo.sha256,
+              sizeBytes: hashInfo.sizeBytes,
+            },
+          ],
+        },
+        assertions: [
+          {
+            id: 'assert_token',
+            claim: 'Service token exists',
+            evidenceIds: ['file_token'],
+            createdAt: new Date().toISOString(),
+          },
+        ],
+      };
+      await saveBundle(bundle);
+
+      // Initial check must succeed
+      const initialCheck = await verifyEvidenceBundle(bundle);
+      expect(initialCheck.status).toBe('verified');
+
+      // Replace normal internal file with a symlink pointing to sensitive .env file
+      await fs.promises.unlink(insideFile);
+      let symlinkCreated = false;
+      try {
+        await fs.promises.symlink(sensitiveFile, insideFile);
+        symlinkCreated = true;
+      } catch (err: unknown) {
+        const error = err as { code?: string };
+        console.warn(`[SKIP] Symlink creation denied by OS (${error.code}). Skipping symlink check.`);
+      }
+
+      if (symlinkCreated) {
+        const verifyResult = await verifyEvidenceBundle(bundle);
+        expect(verifyResult.status).toBe('failed');
+        const item = verifyResult.items.find((i) => i.id === 'file_token');
+        expect(item?.status).toBe('failed');
+        expect(item?.details).toMatch(/Security boundary violation/i);
+        expect(verifyResult.reasons.some((r) => r.includes('Security violation on "service-token.txt"'))).toBe(true);
+      }
+
+      await fs.promises.rm(outsideDir, { recursive: true, force: true });
+    });
+  });
 });

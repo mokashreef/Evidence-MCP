@@ -9,12 +9,14 @@ import {
 import { computeFileSha256AndSize } from './hasher.js';
 import { captureGitState, isGitRepository } from './git.js';
 import { saveBundle } from './storage.js';
+import { assertSafeFilePath, SafeFilePathResult } from './security.js';
 
 /**
  * Re-evaluates all captured evidence inside a bundle against the workspace's current live state.
  *
  * Trust Model:
  * - Git state & File snapshots: Independently verified against disk and repository state.
+ *   File snapshots re-apply strict safe-path & symlink boundary checks before any disk read.
  * - Command results: Agent-reported execution records; marked as 'unverifiable'.
  * - Assertions: If an assertion relies only on command evidence, it is marked as 'unverifiable'
  *   and cannot receive 'verified' status.
@@ -115,23 +117,48 @@ export async function verifyEvidenceBundle(bundle: EvidenceBundle): Promise<Veri
   if (bundle.evidence.fileSnapshots && bundle.evidence.fileSnapshots.length > 0) {
     for (const snapshot of bundle.evidence.fileSnapshots) {
       evidenceTypeMap.set(snapshot.id, 'file');
-      const targetPath = path.resolve(workspacePath, snapshot.path);
 
-      if (!fs.existsSync(targetPath)) {
-        items.push({
-          id: snapshot.id,
-          type: 'file',
-          status: 'failed',
-          target: snapshot.path,
-          details: `Target file was deleted or moved: ${snapshot.path}`,
-        });
-        evidenceStatusMap.set(snapshot.id, 'failed');
-        reasons.push(`File missing: "${snapshot.path}" no longer exists on disk.`);
+      // Security boundary validation before checking existence or reading/hashing target
+      let safePath: SafeFilePathResult;
+      try {
+        safePath = assertSafeFilePath(workspacePath, snapshot.path);
+      } catch (err: unknown) {
+        const errorMsg = (err as Error).message;
+        const isSecurityViolation =
+          errorMsg.includes('Symbolic links are rejected') ||
+          errorMsg.includes('Symlink escape rejected') ||
+          errorMsg.includes('sensitive file blocked') ||
+          errorMsg.includes('Path traversal rejected') ||
+          errorMsg.includes('Null bytes');
+
+        if (isSecurityViolation) {
+          items.push({
+            id: snapshot.id,
+            type: 'file',
+            status: 'failed',
+            target: snapshot.path,
+            details: `Security boundary violation: ${errorMsg}`,
+          });
+          evidenceStatusMap.set(snapshot.id, 'failed');
+          reasons.push(`Security violation on "${snapshot.path}": ${errorMsg}`);
+        } else {
+          // Normal file missing/deleted
+          items.push({
+            id: snapshot.id,
+            type: 'file',
+            status: 'failed',
+            target: snapshot.path,
+            details: `Target file was deleted or moved: ${snapshot.path}`,
+          });
+          evidenceStatusMap.set(snapshot.id, 'failed');
+          reasons.push(`File missing: "${snapshot.path}" no longer exists on disk.`);
+        }
         continue;
       }
 
+      // Safe path confirmed: compute hash on verified regular file
       try {
-        const currentHash = await computeFileSha256AndSize(targetPath);
+        const currentHash = await computeFileSha256AndSize(safePath.absolutePath);
         if (currentHash.sha256 !== snapshot.sha256) {
           items.push({
             id: snapshot.id,
