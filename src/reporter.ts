@@ -29,6 +29,8 @@ export function exportEvidenceReport(
       ? '🟡 STALE'
       : bundle.status === 'failed'
       ? '🔴 FAILED'
+      : bundle.status === 'unverifiable'
+      ? '⚪ UNVERIFIABLE (AGENT-REPORTED)'
       : `⚪ ${bundle.status.toUpperCase()}`;
 
   lines.push(`# Evidence Bundle Report: \`${bundle.id}\``);
@@ -57,7 +59,7 @@ export function exportEvidenceReport(
 
   // Git Evidence
   if (bundle.evidence.git && bundle.evidence.git.length > 0) {
-    lines.push('## Git Evidence');
+    lines.push('## Git Evidence (Independently Verified)');
     lines.push('');
     for (const git of bundle.evidence.git) {
       lines.push(`### Evidence ID: \`${git.id}\``);
@@ -77,7 +79,7 @@ export function exportEvidenceReport(
 
   // File Snapshots
   if (bundle.evidence.fileSnapshots && bundle.evidence.fileSnapshots.length > 0) {
-    lines.push('## File Snapshots');
+    lines.push('## File Snapshots (Independently Verified)');
     lines.push('');
     lines.push('| Evidence ID | File Path | SHA-256 | Size (Bytes) | Captured At |');
     lines.push('|---|---|---|---|---|');
@@ -91,11 +93,17 @@ export function exportEvidenceReport(
 
   // Command Records
   if (bundle.evidence.commands && bundle.evidence.commands.length > 0) {
-    lines.push('## Recorded Commands');
+    lines.push('## Recorded Commands (Agent-Reported)');
+    lines.push('');
+    lines.push('> [!NOTE]');
+    lines.push(
+      '> Command results are self-reported by the agent and are not independently executed or verified by Evidence MCP.'
+    );
     lines.push('');
     for (const cmd of bundle.evidence.commands) {
       const exitBadge = cmd.exitCode === 0 ? '✅ 0' : `❌ ${cmd.exitCode}`;
       lines.push(`### \`${cmd.command}\` (ID: \`${cmd.id}\`)`);
+      lines.push(`- **Provenance:** \`${cmd.provenance || 'agent_reported'}\``);
       lines.push(`- **Exit Code:** ${exitBadge}`);
       lines.push(`- **Recorded At:** \`${cmd.recordedAt}\``);
 
@@ -146,7 +154,13 @@ export function exportEvidenceReport(
       lines.push('|---|---|---|---|');
       for (const item of verification.items) {
         const itemStatus =
-          item.status === 'verified' ? '🟢 Verified' : item.status === 'stale' ? '🟡 Stale' : '🔴 Failed';
+          item.status === 'verified'
+            ? '🟢 Verified'
+            : item.status === 'stale'
+            ? '🟡 Stale'
+            : item.status === 'unverifiable'
+            ? '⚪ Unverifiable (Agent-Reported)'
+            : '🔴 Failed';
         lines.push(`| \`${item.id}\` | ${item.type} | ${itemStatus} | ${item.details} |`);
       }
       lines.push('');

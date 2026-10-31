@@ -22,7 +22,7 @@ import { exportEvidenceReport } from './reporter.js';
 export function createEvidenceServer(): McpServer {
   const server = new McpServer({
     name: 'evidence-mcp',
-    version: '0.1.0',
+    version: '0.1.1',
   });
 
   // 1. create_evidence_bundle
@@ -152,7 +152,7 @@ export function createEvidenceServer(): McpServer {
   // 3. record_command_result
   server.tool(
     'record_command_result',
-    'Records the execution result of a command previously run by an agent (does not execute shell commands).',
+    'Records the self-reported execution result of a command supplied by the agent (provenance: agent_reported). Does not execute shell commands or independently verify command output.',
     {
       bundleId: z.string().min(1).describe('The unique identifier of the evidence bundle.'),
       command: z.string().min(1).describe('The exact command string that was executed.'),
@@ -173,6 +173,7 @@ export function createEvidenceServer(): McpServer {
           exitCode,
           stdout,
           stderr,
+          provenance: 'agent_reported',
         };
 
         if (!bundle.evidence.commands) {
@@ -187,9 +188,10 @@ export function createEvidenceServer(): McpServer {
               type: 'text',
               text: JSON.stringify(
                 {
-                  message: 'Command result recorded successfully.',
+                  message: 'Command result recorded successfully (provenance: agent_reported).',
                   bundleId: bundle.id,
                   evidenceId: cmdEvidence.id,
+                  provenance: cmdEvidence.provenance,
                   command: cmdEvidence.command,
                   exitCode: cmdEvidence.exitCode,
                   recordedAt: cmdEvidence.recordedAt,
@@ -213,7 +215,7 @@ export function createEvidenceServer(): McpServer {
   // 4. snapshot_files
   server.tool(
     'snapshot_files',
-    'Computes SHA-256 hashes and file sizes for files strictly inside the workspace. Rejects sensitive files.',
+    'Computes SHA-256 hashes and file sizes for regular files strictly inside the workspace. Rejects sensitive files and symbolic links.',
     {
       bundleId: z.string().min(1).describe('The unique identifier of the evidence bundle.'),
       paths: z.array(z.string().min(1)).min(1).describe('List of file paths relative to workspace root.'),
@@ -360,7 +362,7 @@ export function createEvidenceServer(): McpServer {
   // 6. verify_evidence_bundle
   server.tool(
     'verify_evidence_bundle',
-    'Re-checks Git state and file hashes against live workspace. Returns verified, stale, or failed status.',
+    'Re-checks Git state and file hashes against live workspace. Returns verified, stale, failed, or unverifiable status.',
     {
       bundleId: z.string().min(1).describe('The unique identifier of the evidence bundle to verify.'),
       workspacePath: z.string().optional().describe('Optional workspace path hint.'),
@@ -391,7 +393,7 @@ export function createEvidenceServer(): McpServer {
   // 7. export_evidence_report
   server.tool(
     'export_evidence_report',
-    'Produces a comprehensive evidence report in Markdown or JSON format suitable for pull requests, issues, or handoffs.',
+    'Produces an evidence report in Markdown or JSON format with clear distinction between verified and agent-reported evidence.',
     {
       bundleId: z.string().min(1).describe('The unique identifier of the evidence bundle to export.'),
       format: z.enum(['markdown', 'json']).default('markdown').describe('Output format: "markdown" or "json".'),

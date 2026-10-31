@@ -18,7 +18,7 @@ describe('Evidence Verification Engine', () => {
     await fs.promises.rm(tempWorkspace, { recursive: true, force: true });
   });
 
-  it('marks bundle as verified when all files match and assertions are supported', async () => {
+  it('marks bundle as verified when files match and assertions are supported by independently verified evidence', async () => {
     const filePath = path.join(tempWorkspace, 'src', 'app.ts');
     await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
     await fs.promises.writeFile(filePath, 'export const version = "1.0.0";\n', 'utf8');
@@ -52,6 +52,7 @@ describe('Evidence Verification Engine', () => {
             exitCode: 0,
             stdout: 'All tests passed',
             stderr: '',
+            provenance: 'agent_reported',
           },
         ],
       },
@@ -70,7 +71,60 @@ describe('Evidence Verification Engine', () => {
     const result = await verifyEvidenceBundle(bundle);
     expect(result.status).toBe('verified');
     expect(result.reasons.length).toBe(0);
-    expect(result.items.every((i) => i.status === 'verified')).toBe(true);
+
+    const fileItem = result.items.find((i) => i.id === 'file_app_ts');
+    expect(fileItem?.status).toBe('verified');
+
+    const cmdItem = result.items.find((i) => i.id === 'cmd_test');
+    expect(cmdItem?.status).toBe('unverifiable');
+
+    const assertItem = result.items.find((i) => i.id === 'assert_1');
+    expect(assertItem?.status).toBe('verified');
+  });
+
+  it('reports assertion and bundle as unverifiable when relying solely on agent-reported command evidence', async () => {
+    const bundle: EvidenceBundle = {
+      id: 'bundle_only_commands',
+      task: 'Run external smoke test',
+      workspacePath: tempWorkspace,
+      status: 'in_progress',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      evidence: {
+        commands: [
+          {
+            id: 'cmd_only',
+            type: 'command',
+            recordedAt: new Date().toISOString(),
+            command: 'pytest tests/test_smoke.py',
+            exitCode: 0,
+            stdout: '1 passed in 0.12s',
+            stderr: '',
+            provenance: 'agent_reported',
+          },
+        ],
+      },
+      assertions: [
+        {
+          id: 'assert_smoke',
+          claim: 'Smoke tests executed and passed',
+          evidenceIds: ['cmd_only'],
+          createdAt: new Date().toISOString(),
+        },
+      ],
+    };
+
+    await saveBundle(bundle);
+
+    const result = await verifyEvidenceBundle(bundle);
+    expect(result.status).toBe('unverifiable');
+    expect(result.reasons.some((r) => r.includes('agent-reported command evidence (unverifiable)'))).toBe(true);
+
+    const assertItem = result.items.find((i) => i.id === 'assert_smoke');
+    expect(assertItem?.status).toBe('unverifiable');
+
+    const cmdItem = result.items.find((i) => i.id === 'cmd_only');
+    expect(cmdItem?.status).toBe('unverifiable');
   });
 
   it('detects stale evidence when file content is modified', async () => {
@@ -189,6 +243,7 @@ describe('Evidence Verification Engine', () => {
             exitCode: 0,
             stdout: 'ok',
             stderr: '',
+            provenance: 'agent_reported',
           },
         ],
       },

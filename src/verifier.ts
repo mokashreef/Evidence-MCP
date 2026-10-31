@@ -1,22 +1,34 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { EvidenceBundle, VerificationItemResult, VerificationResult, VerificationStatus } from './types.js';
+import {
+  EvidenceBundle,
+  VerificationItemResult,
+  VerificationResult,
+  VerificationStatus,
+} from './types.js';
 import { computeFileSha256AndSize } from './hasher.js';
 import { captureGitState, isGitRepository } from './git.js';
 import { saveBundle } from './storage.js';
 
 /**
  * Re-evaluates all captured evidence inside a bundle against the workspace's current live state.
+ *
+ * Trust Model:
+ * - Git state & File snapshots: Independently verified against disk and repository state.
+ * - Command results: Agent-reported execution records; marked as 'unverifiable'.
+ * - Assertions: If an assertion relies only on command evidence, it is marked as 'unverifiable'
+ *   and cannot receive 'verified' status.
  */
 export async function verifyEvidenceBundle(bundle: EvidenceBundle): Promise<VerificationResult> {
   const items: VerificationItemResult[] = [];
   const reasons: string[] = [];
   const workspacePath = path.resolve(bundle.workspacePath);
 
-  // Map to track the verification status of individual evidence IDs
-  const evidenceStatusMap = new Map<string, 'verified' | 'stale' | 'failed'>();
+  // Map to track verification status and evidence type of individual evidence IDs
+  const evidenceStatusMap = new Map<string, 'verified' | 'stale' | 'failed' | 'unverifiable'>();
+  const evidenceTypeMap = new Map<string, 'git' | 'command' | 'file'>();
 
-  // 1. Verify Git Evidence
+  // 1. Verify Git Evidence (Independently verified against Git repository)
   if (bundle.evidence.git && bundle.evidence.git.length > 0) {
     const isRepo = await isGitRepository(workspacePath);
     if (!isRepo) {
@@ -28,6 +40,7 @@ export async function verifyEvidenceBundle(bundle: EvidenceBundle): Promise<Veri
           details: `Workspace is not a valid Git repository: ${workspacePath}`,
         });
         evidenceStatusMap.set(gitEv.id, 'failed');
+        evidenceTypeMap.set(gitEv.id, 'git');
         reasons.push(`Git verification failed: Workspace is not a Git repository.`);
       }
     } else {
@@ -44,12 +57,14 @@ export async function verifyEvidenceBundle(bundle: EvidenceBundle): Promise<Veri
             details: `Failed to inspect Git status: ${errorMsg}`,
           });
           evidenceStatusMap.set(gitEv.id, 'failed');
+          evidenceTypeMap.set(gitEv.id, 'git');
           reasons.push(`Git inspection failed: ${errorMsg}`);
         }
       }
 
       if (currentGitState) {
         for (const gitEv of bundle.evidence.git) {
+          evidenceTypeMap.set(gitEv.id, 'git');
           const headMatches = gitEv.headCommit === currentGitState.headCommit;
           const statusMatches = gitEv.statusShort === currentGitState.statusShort;
 
@@ -82,18 +97,24 @@ export async function verifyEvidenceBundle(bundle: EvidenceBundle): Promise<Veri
     }
   }
 
-  // 2. Commands are immutable records of prior execution.
-  // Validate that their records exist and mark them as verified records.
-  if (bundle.evidence.commands) {
+  // 2. Command Evidence (Agent-reported execution logs: not independently verified)
+  if (bundle.evidence.commands && bundle.evidence.commands.length > 0) {
     for (const cmdEv of bundle.evidence.commands) {
-      evidenceStatusMap.set(cmdEv.id, 'verified');
+      evidenceStatusMap.set(cmdEv.id, 'unverifiable');
+      evidenceTypeMap.set(cmdEv.id, 'command');
+      items.push({
+        id: cmdEv.id,
+        type: 'command',
+        status: 'unverifiable',
+        details: `Agent-reported execution record (${cmdEv.command}, exit ${cmdEv.exitCode}); not independently verified.`,
+      });
     }
   }
 
-  // 3. Verify File Snapshots
+  // 3. Verify File Snapshots (Independently verified against on-disk files)
   if (bundle.evidence.fileSnapshots && bundle.evidence.fileSnapshots.length > 0) {
     for (const snapshot of bundle.evidence.fileSnapshots) {
-      // Re-resolve target file from workspacePath to handle moving/relative contexts safely
+      evidenceTypeMap.set(snapshot.id, 'file');
       const targetPath = path.resolve(workspacePath, snapshot.path);
 
       if (!fs.existsSync(targetPath)) {
@@ -170,20 +191,25 @@ export async function verifyEvidenceBundle(bundle: EvidenceBundle): Promise<Veri
         continue;
       }
 
-      let assertionStatus: 'verified' | 'stale' | 'failed' = 'verified';
       const missingEvidence: string[] = [];
       const staleEvidence: string[] = [];
+      let hasFailedEvidence = false;
+      let hasVerifiableEvidence = false;
 
       for (const evId of assertion.evidenceIds) {
         const status = evidenceStatusMap.get(evId);
+        const type = evidenceTypeMap.get(evId);
+
         if (!status) {
           missingEvidence.push(evId);
-          assertionStatus = 'failed';
         } else if (status === 'failed') {
-          assertionStatus = 'failed';
-        } else if (status === 'stale' && assertionStatus !== 'failed') {
+          hasFailedEvidence = true;
+        } else if (status === 'stale') {
           staleEvidence.push(evId);
-          assertionStatus = 'stale';
+        } else if (status === 'verified') {
+          if (type === 'git' || type === 'file') {
+            hasVerifiableEvidence = true;
+          }
         }
       }
 
@@ -197,15 +223,7 @@ export async function verifyEvidenceBundle(bundle: EvidenceBundle): Promise<Veri
         reasons.push(
           `Assertion "${assertion.claim}" references non-existent evidence IDs: [${missingEvidence.join(', ')}].`
         );
-      } else if (assertionStatus === 'stale') {
-        items.push({
-          id: assertion.id,
-          type: 'assertion',
-          status: 'stale',
-          details: `Supported by stale evidence: [${staleEvidence.join(', ')}]`,
-        });
-        reasons.push(`Assertion "${assertion.claim}" relies on stale evidence.`);
-      } else if (assertionStatus === 'failed') {
+      } else if (hasFailedEvidence) {
         items.push({
           id: assertion.id,
           type: 'assertion',
@@ -213,12 +231,31 @@ export async function verifyEvidenceBundle(bundle: EvidenceBundle): Promise<Veri
           details: `Supporting evidence check failed for assertion.`,
         });
         reasons.push(`Assertion "${assertion.claim}" failed because its supporting evidence failed.`);
+      } else if (staleEvidence.length > 0) {
+        items.push({
+          id: assertion.id,
+          type: 'assertion',
+          status: 'stale',
+          details: `Supported by stale evidence: [${staleEvidence.join(', ')}]`,
+        });
+        reasons.push(`Assertion "${assertion.claim}" relies on stale evidence.`);
+      } else if (!hasVerifiableEvidence) {
+        // Relies solely on agent-reported command results!
+        items.push({
+          id: assertion.id,
+          type: 'assertion',
+          status: 'unverifiable',
+          details: `Assertion "${assertion.claim}" relies exclusively on agent-reported command execution records and cannot be independently verified.`,
+        });
+        reasons.push(
+          `Assertion "${assertion.claim}" relies solely on agent-reported command evidence (unverifiable).`
+        );
       } else {
         items.push({
           id: assertion.id,
           type: 'assertion',
           status: 'verified',
-          details: `All ${assertion.evidenceIds.length} supporting evidence item(s) are valid and verified.`,
+          details: `Supported by independently verified evidence (${assertion.evidenceIds.length} item(s)).`,
         });
       }
     }
@@ -226,15 +263,22 @@ export async function verifyEvidenceBundle(bundle: EvidenceBundle): Promise<Veri
 
   // 5. Determine Overall Status
   let overallStatus: VerificationStatus = 'verified';
-  if (items.some((item) => item.status === 'failed') || reasons.some((r) => r.includes('failed') || r.includes('missing') || r.includes('lacks'))) {
+  if (
+    items.some((item) => item.status === 'failed') ||
+    reasons.some((r) => r.includes('failed') || r.includes('missing') || r.includes('lacks'))
+  ) {
     overallStatus = 'failed';
   } else if (items.some((item) => item.status === 'stale')) {
     overallStatus = 'stale';
+  } else if (items.some((item) => item.type === 'assertion' && item.status === 'unverifiable')) {
+    overallStatus = 'unverifiable';
   }
 
   const summary =
     overallStatus === 'verified'
-      ? `All ${items.length} evidence items and assertions are verified and fresh.`
+      ? `All assertions are backed by independently verified evidence.`
+      : overallStatus === 'unverifiable'
+      ? `Bundle assertions rely solely on agent-reported command results and cannot be independently verified.`
       : overallStatus === 'stale'
       ? `Evidence bundle is stale: workspace or tracked files have changed since bundle was created.`
       : `Evidence verification failed: one or more critical evidence components or files are missing or invalid.`;

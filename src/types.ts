@@ -1,8 +1,8 @@
 import { z } from 'zod';
 
-export type BundleStatus = 'in_progress' | 'completed' | 'verified' | 'stale' | 'failed';
+export type BundleStatus = 'in_progress' | 'completed' | 'verified' | 'stale' | 'failed' | 'unverifiable';
 export type EvidenceType = 'git' | 'command' | 'file_snapshot';
-export type VerificationStatus = 'verified' | 'stale' | 'failed';
+export type VerificationStatus = 'verified' | 'stale' | 'failed' | 'unverifiable';
 
 export interface GitEvidence {
   id: string;
@@ -23,6 +23,7 @@ export interface CommandEvidence {
   exitCode: number;
   stdout: string;
   stderr: string;
+  provenance: 'agent_reported';
 }
 
 export interface FileSnapshotEvidence {
@@ -60,8 +61,8 @@ export interface EvidenceBundle {
 
 export interface VerificationItemResult {
   id: string;
-  type: 'git' | 'file' | 'assertion';
-  status: 'verified' | 'stale' | 'failed';
+  type: 'git' | 'file' | 'command' | 'assertion';
+  status: 'verified' | 'stale' | 'failed' | 'unverifiable' | 'recorded';
   details: string;
   target?: string;
   expected?: string;

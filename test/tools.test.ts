@@ -76,7 +76,7 @@ describe('Evidence MCP Server Tools Integration', () => {
     const fileEvidenceId = snapData.snapshots[0].evidenceId;
     expect(fileEvidenceId).toBeDefined();
 
-    // 4. Record command result (e.g. test run)
+    // 4. Record command result (agent-reported provenance)
     const cmdRes = (await client.callTool({
       name: 'record_command_result',
       arguments: {
@@ -91,6 +91,7 @@ describe('Evidence MCP Server Tools Integration', () => {
     const cmdData = JSON.parse(cmdRes.content[0].text);
     const cmdEvidenceId = cmdData.evidenceId;
     expect(cmdEvidenceId).toBeDefined();
+    expect(cmdData.provenance).toBe('agent_reported');
 
     // 5. Add assertion referencing evidence
     const assertRes = (await client.callTool({
@@ -105,7 +106,7 @@ describe('Evidence MCP Server Tools Integration', () => {
     const assertData = JSON.parse(assertRes.content[0].text);
     expect(assertData.assertionId).toBeDefined();
 
-    // 6. Verify evidence bundle
+    // 6. Verify evidence bundle (backed by verified file evidence)
     const verifyRes = (await client.callTool({
       name: 'verify_evidence_bundle',
       arguments: {
@@ -132,6 +133,7 @@ describe('Evidence MCP Server Tools Integration', () => {
     expect(mdReport).toContain('add function is implemented');
     expect(mdReport).toContain('PASS test/math.test.ts');
     expect(mdReport).toContain('🟢 VERIFIED');
+    expect(mdReport).toContain('agent_reported');
 
     // 8. Export evidence report (JSON)
     const exportJsonRes = (await client.callTool({
@@ -145,6 +147,47 @@ describe('Evidence MCP Server Tools Integration', () => {
     const parsedJson = JSON.parse(exportJsonRes.content[0].text);
     expect(parsedJson.bundle.id).toBe(bundleId);
     expect(parsedJson.verification.status).toBe('verified');
+  });
+
+  it('marks bundle as unverifiable if assertion relies only on command evidence', async () => {
+    const createRes = (await client.callTool({
+      name: 'create_evidence_bundle',
+      arguments: {
+        task: 'Command only task',
+        workspacePath: tempWorkspace,
+      },
+    })) as { content: [{ type: 'text'; text: string }] };
+    const { bundleId } = JSON.parse(createRes.content[0].text);
+
+    const cmdRes = (await client.callTool({
+      name: 'record_command_result',
+      arguments: {
+        bundleId,
+        command: 'echo test',
+        exitCode: 0,
+        stdout: 'ok',
+        stderr: '',
+      },
+    })) as { content: [{ type: 'text'; text: string }] };
+    const { evidenceId } = JSON.parse(cmdRes.content[0].text);
+
+    await client.callTool({
+      name: 'add_assertion',
+      arguments: {
+        bundleId,
+        claim: 'Claim backed only by unverified command output',
+        evidenceIds: [evidenceId],
+      },
+    });
+
+    const verifyRes = (await client.callTool({
+      name: 'verify_evidence_bundle',
+      arguments: { bundleId },
+    })) as { content: [{ type: 'text'; text: string }] };
+
+    const verifyData = JSON.parse(verifyRes.content[0].text);
+    expect(verifyData.status).toBe('unverifiable');
+    expect(verifyData.reasons.some((r: string) => r.includes('agent-reported command evidence'))).toBe(true);
   });
 
   it('rejects snapshotting sensitive files and returns an error', async () => {
