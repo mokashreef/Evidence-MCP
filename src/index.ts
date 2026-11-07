@@ -6,4 +6,5 @@ export * from './git.js';
 export * from './storage.js';
 export * from './verifier.js';
 export * from './reporter.js';
+export * from './attestation.js';
 export { runCli, printHelp } from './cli.js';

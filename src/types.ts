@@ -43,6 +43,14 @@ export interface Assertion {
   createdAt: string;
 }
 
+export interface BundleAttestation {
+  algorithm: 'ed25519';
+  publicKeyPem: string;
+  keyFingerprint: string;
+  signedAt: string;
+  signature: string;
+}
+
 export interface EvidenceBundle {
   id: string;
   task: string;
@@ -51,6 +59,7 @@ export interface EvidenceBundle {
   createdAt: string;
   updatedAt: string;
   metadata?: Record<string, unknown>;
+  attestation?: BundleAttestation;
   evidence: {
     git?: GitEvidence[];
     commands?: CommandEvidence[];
@@ -61,7 +70,7 @@ export interface EvidenceBundle {
 
 export interface VerificationItemResult {
   id: string;
-  type: 'git' | 'file' | 'command' | 'assertion';
+  type: 'git' | 'file' | 'command' | 'assertion' | 'attestation';
   status: 'verified' | 'stale' | 'failed' | 'unverifiable' | 'recorded';
   details: string;
   target?: string;
@@ -132,3 +141,10 @@ export const ExportEvidenceReportSchema = z.object({
   workspacePath: z.string().optional(),
 });
 export type ExportEvidenceReportInput = z.infer<typeof ExportEvidenceReportSchema>;
+
+export const SignEvidenceBundleSchema = z.object({
+  bundleId: z.string().min(1, 'bundleId is required.'),
+  privateKeyPem: z.string().optional(),
+  workspacePath: z.string().optional(),
+});
+export type SignEvidenceBundleInput = z.infer<typeof SignEvidenceBundleSchema>;

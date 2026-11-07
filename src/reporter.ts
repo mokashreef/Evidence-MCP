@@ -56,6 +56,12 @@ export function exportEvidenceReport(
   lines.push(`**Created At:** \`${bundle.createdAt}\``);
   lines.push(`**Updated At:** \`${bundle.updatedAt}\``);
   lines.push(`**Workspace:** \`${bundle.workspacePath}\``);
+  if (bundle.attestation) {
+    lines.push(
+      `**Cryptographic Attestation:** 🔏 \`${bundle.attestation.algorithm.toUpperCase()}\` (Key: \`${bundle.attestation.keyFingerprint.slice(0, 16)}...\`)`
+    );
+    lines.push(`**Signed At:** \`${bundle.attestation.signedAt}\``);
+  }
   lines.push('');
 
   // Assertions
@@ -479,6 +485,11 @@ function generateHtmlReport(bundle: EvidenceBundle, verification?: VerificationR
       <div class="meta-item"><span class="meta-label">Created At</span><span>${escapeHtml(bundle.createdAt)}</span></div>
       <div class="meta-item"><span class="meta-label">Updated At</span><span>${escapeHtml(bundle.updatedAt)}</span></div>
       <div class="meta-item"><span class="meta-label">Status</span><span style="font-weight:600;color:${statusColor}">${escapeHtml(bundle.status)}</span></div>
+      ${
+        bundle.attestation
+          ? `<div class="meta-item"><span class="meta-label">Attestation</span><span>🔏 ${escapeHtml(bundle.attestation.algorithm.toUpperCase())} (<code>${escapeHtml(bundle.attestation.keyFingerprint.slice(0, 12))}...</code>)</span></div>`
+          : ''
+      }
     </div>
 
     ${verificationHtml}

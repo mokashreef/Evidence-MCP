@@ -10,6 +10,7 @@ import { computeFileSha256AndSize } from './hasher.js';
 import { captureGitState, isGitRepository } from './git.js';
 import { saveBundle } from './storage.js';
 import { assertSafeFilePath, SafeFilePathResult } from './security.js';
+import { verifyBundleAttestation } from './attestation.js';
 
 /**
  * Re-evaluates all captured evidence inside a bundle against the workspace's current live state.
@@ -288,7 +289,30 @@ export async function verifyEvidenceBundle(bundle: EvidenceBundle): Promise<Veri
     }
   }
 
-  // 5. Determine Overall Status
+  // 5. Verify Cryptographic Attestation (if present)
+  if (bundle.attestation) {
+    const attestationCheck = verifyBundleAttestation(bundle);
+    if (attestationCheck.valid) {
+      items.push({
+        id: 'attestation',
+        type: 'attestation',
+        status: 'verified',
+        details: `Ed25519 signature verified (Key: ${bundle.attestation.keyFingerprint.slice(0, 16)}...)`,
+      });
+    } else {
+      items.push({
+        id: 'attestation',
+        type: 'attestation',
+        status: 'failed',
+        details: attestationCheck.reason || 'Cryptographic signature mismatch: bundle was tampered with.',
+      });
+      reasons.push(
+        `Attestation failure: ${attestationCheck.reason || 'Signature mismatch: bundle content was tampered with.'}`
+      );
+    }
+  }
+
+  // 6. Determine Overall Status
   let overallStatus: VerificationStatus = 'verified';
   if (
     items.some((item) => item.status === 'failed') ||

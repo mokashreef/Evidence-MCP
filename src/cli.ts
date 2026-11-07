@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { createEvidenceServer } from './server.js';
-import { listBundles, loadBundle } from './storage.js';
+import { listBundles, loadBundle, saveBundle } from './storage.js';
 import { verifyEvidenceBundle } from './verifier.js';
 import { exportEvidenceReport } from './reporter.js';
+import { signEvidenceBundle } from './attestation.js';
 import path from 'node:path';
 import fs from 'node:fs';
 
-const VERSION = '0.2.0';
+const VERSION = '0.3.0';
 
 export function printHelp(): void {
   console.log(`
@@ -19,6 +20,7 @@ Usage:
   evidence-mcp list [workspacePath]         List all evidence bundles in workspace
   evidence-mcp verify <bundleId> [options]  Verify an evidence bundle against disk & Git
   evidence-mcp report <bundleId> [options]  Export an evidence report (markdown|json|html)
+  evidence-mcp sign <bundleId> [options]    Sign a bundle using an Ed25519 keypair
   evidence-mcp --help, -h                   Show this help message
   evidence-mcp --version, -v                Show version number
 
@@ -26,6 +28,7 @@ Options:
   --workspace, -w <path>   Workspace directory path (defaults to current working directory)
   --format, -f <format>    Report format: markdown, json, or html (default: markdown)
   --output, -o <file>      Write exported report directly to file
+  --key, -k <file>         Private key file for Ed25519 signing (auto-generates if omitted)
 `);
 }
 
@@ -189,6 +192,48 @@ export async function runCli(args: string[]): Promise<number> {
       return 0;
     } catch (err: unknown) {
       console.error(`Report generation error: ${(err as Error).message}`);
+      return 1;
+    }
+  }
+
+  // 4. Command: sign <bundleId>
+  if (firstArg === 'sign') {
+    const bundleId = args[1];
+    if (!bundleId || bundleId.startsWith('-')) {
+      console.error('Error: bundleId is required for sign command.\nUsage: evidence-mcp sign <bundleId> [--key <pemFile>]');
+      return 1;
+    }
+
+    let keyFilePath: string | undefined;
+    let workspace: string | undefined;
+
+    for (let i = 2; i < args.length; i++) {
+      if ((args[i] === '--key' || args[i] === '-k') && args[i + 1]) {
+        keyFilePath = args[++i];
+      } else if ((args[i] === '--workspace' || args[i] === '-w') && args[i + 1]) {
+        workspace = args[++i];
+      }
+    }
+
+    try {
+      const bundle = await loadBundle(bundleId, workspace);
+      let privateKeyPem: string | undefined;
+      if (keyFilePath) {
+        privateKeyPem = await fs.promises.readFile(path.resolve(keyFilePath), 'utf8');
+      }
+
+      const attestation = await signEvidenceBundle(bundle, privateKeyPem);
+      await saveBundle(bundle);
+
+      console.log(`\nEvidence Bundle Cryptographically Signed: ${bundle.id}`);
+      console.log('================================================================================');
+      console.log(`Algorithm:       ${attestation.algorithm.toUpperCase()}`);
+      console.log(`Key Fingerprint: ${attestation.keyFingerprint}`);
+      console.log(`Signed At:       ${attestation.signedAt}`);
+      console.log('================================================================================\n');
+      return 0;
+    } catch (err: unknown) {
+      console.error(`Signing error: ${(err as Error).message}`);
       return 1;
     }
   }

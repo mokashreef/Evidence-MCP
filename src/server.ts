@@ -18,11 +18,12 @@ import {
 } from './storage.js';
 import { verifyEvidenceBundle } from './verifier.js';
 import { exportEvidenceReport } from './reporter.js';
+import { signEvidenceBundle } from './attestation.js';
 
 export function createEvidenceServer(): McpServer {
   const server = new McpServer({
     name: 'evidence-mcp',
-    version: '0.2.0',
+    version: '0.3.0',
   });
 
   // 1. create_evidence_bundle
@@ -421,6 +422,52 @@ export function createEvidenceServer(): McpServer {
         return {
           isError: true,
           content: [{ type: 'text', text: `Failed to export evidence report: ${message}` }],
+        };
+      }
+    }
+  );
+
+  // 8. sign_evidence_bundle
+  server.tool(
+    'sign_evidence_bundle',
+    'Cryptographically signs an evidence bundle using an Ed25519 keypair for author attestation and tamper detection.',
+    {
+      bundleId: z.string().min(1).describe('The unique identifier of the evidence bundle to sign.'),
+      privateKeyPem: z
+        .string()
+        .optional()
+        .describe('Optional Ed25519 private key in PEM format (uses local agent key if omitted).'),
+      workspacePath: z.string().optional().describe('Optional workspace path hint.'),
+    },
+    async ({ bundleId, privateKeyPem, workspacePath }) => {
+      try {
+        const bundle = await loadBundle(bundleId, workspacePath);
+        const attestation = await signEvidenceBundle(bundle, privateKeyPem);
+        await saveBundle(bundle);
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  message: 'Evidence bundle cryptographically signed successfully.',
+                  bundleId: bundle.id,
+                  algorithm: attestation.algorithm,
+                  keyFingerprint: attestation.keyFingerprint,
+                  signedAt: attestation.signedAt,
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `Failed to sign evidence bundle: ${message}` }],
         };
       }
     }
