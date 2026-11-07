@@ -128,7 +128,7 @@ export type VerifyEvidenceBundleInput = z.infer<typeof VerifyEvidenceBundleSchem
 
 export const ExportEvidenceReportSchema = z.object({
   bundleId: z.string().min(1, 'bundleId is required.'),
-  format: z.enum(['markdown', 'json']).default('markdown'),
+  format: z.enum(['markdown', 'json', 'html']).default('markdown'),
   workspacePath: z.string().optional(),
 });
 export type ExportEvidenceReportInput = z.infer<typeof ExportEvidenceReportSchema>;

@@ -22,7 +22,7 @@ import { exportEvidenceReport } from './reporter.js';
 export function createEvidenceServer(): McpServer {
   const server = new McpServer({
     name: 'evidence-mcp',
-    version: '0.1.2',
+    version: '0.2.0',
   });
 
   // 1. create_evidence_bundle
@@ -393,10 +393,13 @@ export function createEvidenceServer(): McpServer {
   // 7. export_evidence_report
   server.tool(
     'export_evidence_report',
-    'Produces an evidence report in Markdown or JSON format with clear distinction between verified and agent-reported evidence.',
+    'Produces an evidence report in Markdown, JSON, or HTML format with clear distinction between verified and agent-reported evidence.',
     {
       bundleId: z.string().min(1).describe('The unique identifier of the evidence bundle to export.'),
-      format: z.enum(['markdown', 'json']).default('markdown').describe('Output format: "markdown" or "json".'),
+      format: z
+        .enum(['markdown', 'json', 'html'])
+        .default('markdown')
+        .describe('Output format: "markdown", "json", or "html".'),
       workspacePath: z.string().optional().describe('Optional workspace path hint.'),
     },
     async ({ bundleId, format, workspacePath }) => {
