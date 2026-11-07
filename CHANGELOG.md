@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-11-07
+
+### Added
+- **Standalone CLI Commands:** Direct CLI interface for developers and CI/CD pipelines without requiring an MCP client:
+  - `evidence-mcp list [workspace]`: Displays all recorded bundles in a clean tabular view.
+  - `evidence-mcp verify <bundleId>`: Verifies a bundle against disk and Git state, exiting with `0` on verification success or `1` on failure/stale status.
+  - `evidence-mcp report <bundleId> [--format markdown|json|html] [--output <file>]`: Exports verification reports to stdout or files.
+- **Standalone Interactive HTML Reports:** Added `html` format to `export_evidence_report` and the CLI. Produces a self-contained, offline-safe, responsive HTML report with light/dark theme support and XSS protection.
+- **Comprehensive Test Coverage:** Added unit test suites for CLI commands (`test/cli.test.ts`) and HTML report rendering (`test/html-reporter.test.ts`), bringing total passing test suite to 80 tests.
+
 ## [0.1.2] - 2026-10-31
 
 ### Security
