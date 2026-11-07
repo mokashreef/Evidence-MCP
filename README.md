@@ -92,9 +92,9 @@ All data is stored locally in human-readable JSON files inside the workspace roo
 
 ---
 
-## Tools Catalog (v0.2.0)
+## Tools Catalog (v0.3.0)
 
-Evidence MCP provides seven focused tools through the Model Context Protocol:
+Evidence MCP provides eight focused tools through the Model Context Protocol:
 
 | Tool | Purpose | Key Inputs | Output |
 |---|---|---|---|
@@ -103,7 +103,8 @@ Evidence MCP provides seven focused tools through the Model Context Protocol:
 | `record_command_result` | Logs agent-reported command execution result (provenance: agent_reported) | `bundleId`, `command`, `exitCode`, `stdout`, `stderr` | `evidenceId`, `command`, `exitCode`, `provenance` |
 | `snapshot_files` | Computes SHA-256 and size for regular files inside workspace | `bundleId`, `paths` | `snapshots: [{ evidenceId, path, sha256, sizeBytes }]` |
 | `add_assertion` | Attaches a claim linked to supporting evidence | `bundleId`, `claim`, `evidenceIds` (min 1) | `assertionId`, `claim`, `evidenceIds` |
-| `verify_evidence_bundle` | Validates file hashes and Git state against live workspace | `bundleId`, `workspacePath?` | `status` (`verified` \| `stale` \| `failed` \| `unverifiable`), `items`, `reasons` |
+| `sign_evidence_bundle` | Cryptographically signs the bundle using native Ed25519 | `bundleId`, `agentId?`, `privateKeyPath?` | `attestation: { agentId, algorithm, publicKey, signature }` |
+| `verify_evidence_bundle` | Validates file hashes, Git state, and Ed25519 signature against workspace | `bundleId`, `workspacePath?` | `status` (`verified` \| `stale` \| `failed` \| `unverifiable`), `items`, `reasons` |
 | `export_evidence_report` | Generates a shareable Markdown, JSON, or interactive HTML report | `bundleId`, `format` (`markdown` \| `json` \| `html`) | Formatted report ready for PR or handoff |
 
 ---
@@ -125,7 +126,16 @@ node dist/cli.js verify bundle_9a41f0bc
 # Exits with 0 if verified; exits with 1 if stale, failed, or unverifiable
 ```
 
-### 3. Export an Interactive HTML or Markdown Report
+### 3. Cryptographically Sign a Bundle
+```bash
+# Sign using workspace default Ed25519 key (auto-generated if absent):
+node dist/cli.js sign bundle_9a41f0bc
+
+# Sign with a specific PEM private key:
+node dist/cli.js sign bundle_9a41f0bc --key /path/to/agent_private.pem
+```
+
+### 4. Export an Interactive HTML or Markdown Report
 ```bash
 # Export standalone, offline-safe interactive HTML report:
 node dist/cli.js report bundle_9a41f0bc --format html --output ./reports/evidence.html
@@ -230,7 +240,28 @@ Here is how an agent interacts with Evidence MCP during a coding assignment:
 }
 ```
 
-### 7. Export Handoff Report
+### 7. Cryptographically Sign the Bundle (Attestation)
+```json
+// Call: sign_evidence_bundle
+{
+  "bundleId": "bundle_9a41f0bc",
+  "agentId": "agent-primary"
+}
+```
+*Returns:*
+```json
+{
+  "bundleId": "bundle_9a41f0bc",
+  "attestation": {
+    "agentId": "agent-primary",
+    "algorithm": "ed25519",
+    "publicKey": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA...",
+    "signature": "3a8f1b2c4d..."
+  }
+}
+```
+
+### 8. Export Handoff Report
 ```json
 // Call: export_evidence_report
 {
@@ -245,6 +276,7 @@ Here is how an agent interacts with Evidence MCP during a coding assignment:
 ## Security & Privacy Model
 
 - **Zero Telemetry & Tracking:** Evidence MCP contains no analytics, telemetry, or network calls.
+- **Ed25519 Cryptographic Attestation:** Native Ed25519 asymmetric signatures ensure bundle integrity. Any post-signing tampering with task definitions, assertions, file hashes, or command outputs immediately invalidates the signature during verification.
 - **Strict Path Sandboxing:** Prevents path traversal (`../`) and verifies that every snapshotted file strictly resides within the declared `workspacePath`.
 - **Symlink Protection & Boundary Re-evaluation:** Resolves canonical real filesystem paths (`fs.realpathSync`) for both workspace and targets. In v0.1, symbolic links are explicitly rejected for file snapshots. This security boundary is strictly re-evaluated during `verify_evidence_bundle`, immediately failing any file that was replaced by a symlink or moved outside the workspace after capture without reading or hashing the target.
 - **Sensitive File Blocklist:** Automatically blocks snapshotting of secret files:
@@ -305,31 +337,33 @@ npm run build
 
 ---
 
-## Scope & Boundaries (v0.2.0)
+## Scope & Boundaries (v0.3.0)
 
-### Strictly In Scope for v0.2.0
-- Local file persistence under `.evidence-mcp/bundles/`.
-- Standalone CLI interface (`verify`, `list`, `report`) with CI exit codes.
-- Interactive, responsive, offline-safe HTML report generation.
+### Strictly In Scope for v0.3.0
+- Native Ed25519 asymmetric cryptographic attestation and bundle signing (`sign_evidence_bundle` and `evidence-mcp sign`).
+- Deterministic canonical payload serialization (`getCanonicalPayload`) for tamper resistance.
+- Cryptographic signature re-verification in `verify_evidence_bundle` and CLI `verify`.
+- Local file persistence under `.evidence-mcp/bundles/` and key pairs under `.evidence-mcp/keys/`.
+- Standalone CLI interface (`verify`, `list`, `report`, `sign`) with CI exit codes.
+- Interactive, responsive, offline-safe HTML report generation with attestation badges.
 - Safe Git state capture (read-only).
 - Recording command outputs provided by the agent (explicitly marked with `agent_reported` provenance).
 - Workspace-confined SHA-256 file snapshots (regular files only; symlinks rejected).
 - Mandatory evidence-linked assertions.
-- Live verification of file hashes and Git status.
-- Clear distinction between verified on-disk evidence and unverifiable agent logs.
+- Live verification of file hashes, Git status, and cryptographic signatures.
+- Clear distinction between verified on-disk evidence, cryptographic signatures, and unverifiable agent logs.
 - Markdown, JSON, and HTML report exporting.
 
-### Out of Scope for v0.2.0
-- **Direct Shell Command Execution:** `record_command_result` records results provided by agents. The server does not execute arbitrary shell strings from client inputs.
+### Out of Scope for v0.3.0
+- **Direct Arbitrary Shell Command Execution:** `record_command_result` records results provided by agents. The server does not execute arbitrary shell strings from client inputs.
 - **Remote Publishing / Cloud Syncing:** Evidence bundles are local to the workspace. There is no auto-pushing to remote cloud APIs or external issue trackers.
-- **Cryptographic Signatures (PKI):** Bundles rely on SHA-256 content hashes and Git commit trees; asymmetric GPG/Ed25519 bundle signing is reserved for future versions.
 
 ---
 
 ## Roadmap
 
-- **v0.3:** Containerized sandbox execution runner for reproducible, server-verified command execution.
-- **v0.4:** Asymmetric cryptographic signatures for bundle author attestation.
+- **v0.3 (Completed):** Native Ed25519 cryptographic attestation, bundle signing, and tamper verification.
+- **v0.4:** Containerized sandbox execution runner for reproducible, server-verified command execution.
 - **v0.5:** Multi-workspace support for cross-repository monorepo changes.
 - **v0.6:** Diff-level syntax tree (AST) evidence capturing.
 

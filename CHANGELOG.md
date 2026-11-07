@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-11-07
+
+### Added
+- **Native Ed25519 Cryptographic Attestation & Bundle Signing:**
+  - Zero-dependency asymmetric cryptographic signing using native Node.js `node:crypto` (`ed25519`).
+  - Canonical deterministic JSON payload serialization (`getCanonicalPayload`) with recursive key sorting to eliminate serialization jitter.
+  - New MCP tool `sign_evidence_bundle`: enables coding agents to digitally sign bundles using a persistent agent key pair stored in `.evidence-mcp/keys/` or custom key paths.
+  - New CLI command `evidence-mcp sign <bundleId> [--key <path>]` for signing bundles directly from the terminal.
+  - Cryptographic attestation verification integrated into `verify_evidence_bundle` and `evidence-mcp verify`: tamper detection immediately fails verification if any bundle property (task, assertions, file hashes, command records) is altered post-attestation.
+  - Attestation badges and public key metadata displayed in Markdown and responsive HTML reports.
+  - Added comprehensive test suite in `test/attestation.test.ts` (87 total passing tests).
+
 ## [0.2.0] - 2026-11-07
 
 ### Added
