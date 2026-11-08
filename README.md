@@ -65,12 +65,13 @@ Evidence MCP establishes an explicit, honest trust boundary between what can and
 |---|---|---|---|
 | **File Snapshots** | Local Filesystem | Recomputed SHA-256 hash and byte size against on-disk files | `verified`, `stale`, or `failed` |
 | **Git State** | Git Repository | Re-queried Git CLI for branch, HEAD commit, and working tree cleanliness | `verified`, `stale`, or `failed` |
+| **AST & Semantic Evidence** | Local Source Files & Git HEAD | Zero-dependency structural symbol parsing and live disk comparison | `verified`, `stale`, or `failed` |
 | **Server-Executed Commands** | Sandboxed Process Runner | Directly spawned by Evidence MCP (`provenance: 'server_executed'`) with real exit code, duration, and output | `verified` (exit 0) or `failed` (exit != 0) |
 | **Agent-Reported Commands** | Agent Client Input | Recorded as self-reported execution logs (`provenance: 'agent_reported'`) | `unverifiable` (acknowledged log, not verified) |
 | **Cryptographic Attestation** | Ed25519 Keypair | Asymmetric digital signature verified over canonical recursive JSON payload | `verified` (authentic) or `failed` (tampered) |
 
 ### Assertion Verification Rules
-- **Independently Backed:** An assertion supported by at least one verified file snapshot, Git state, or server-executed command receives `verified` status.
+- **Independently Backed:** An assertion supported by at least one verified file snapshot, Git state, AST semantic evidence, or server-executed command receives `verified` status.
 - **Agent-Reported Only:** An assertion relying *exclusively* on self-reported command evidence is marked as `unverifiable`. It cannot receive `verified` status because the server did not execute or observe the process.
 - **Integrity Invalidation:** If any supporting file is altered (`stale`) or removed (`failed`), or if a supporting server-executed command failed with non-zero exit code, the assertion is marked accordingly.
 
@@ -94,21 +95,22 @@ All data is stored locally in human-readable JSON files inside the workspace roo
 
 ---
 
-## Tools Catalog (v0.5.0)
+## Tools Catalog (v0.6.0)
 
-Evidence MCP provides ten focused tools through the Model Context Protocol:
+Evidence MCP provides eleven focused tools through the Model Context Protocol:
 
 | Tool | Purpose | Key Inputs | Output |
 |---|---|---|---|
 | `create_evidence_bundle` | Initializes a new evidence bundle for a task | `task`, `workspacePath`, `metadata?`, `additionalWorkspaces?` | `bundleId`, initial status (`in_progress`) |
 | `register_workspace` | Dynamically binds a named monorepo package or secondary repository | `bundleId`, `name`, `path` | `workspaceName`, `workspacePath`, `allWorkspaces` |
 | `capture_git_evidence` | Safely records Git HEAD, branch, and status in targeted workspace | `bundleId`, `workspaceName?`, `workspacePath?` | `evidenceId`, `branch`, `headCommit`, `isClean` |
+| `capture_ast_evidence` | Extracts AST symbols and computes semantic diffs with breaking change detection | `bundleId`, `files`, `workspaceName?`, `compareWithGitHead?` | `astEvidence: [{ id, filePath, symbolsCount, hasSemanticChanges, isBreakingChange }]` |
 | `execute_verified_command` | Spawns an approved command in sandboxed runner and captures verified execution | `bundleId`, `command`, `args?`, `cwd?`, `workspaceName?` | `evidenceId`, `exitCode`, `durationMs`, `provenance: server_executed` |
 | `record_command_result` | Logs agent-reported command execution result (provenance: agent_reported) | `bundleId`, `command`, `exitCode`, `stdout`, `stderr`, `workspaceName?` | `evidenceId`, `command`, `exitCode`, `provenance` |
 | `snapshot_files` | Computes SHA-256 and size for regular files inside workspace boundary | `bundleId`, `paths`, `workspaceName?` | `snapshots: [{ evidenceId, workspaceName, path, sha256 }]` |
 | `add_assertion` | Attaches a claim linked to supporting evidence | `bundleId`, `claim`, `evidenceIds` (min 1) | `assertionId`, `claim`, `evidenceIds` |
 | `sign_evidence_bundle` | Cryptographically signs the bundle using native Ed25519 | `bundleId`, `agentId?`, `privateKeyPath?` | `attestation: { agentId, algorithm, publicKey, signature }` |
-| `verify_evidence_bundle` | Validates file hashes, Git state, command results, and signatures across workspaces | `bundleId`, `workspacePath?` | `status` (`verified` \| `stale` \| `failed` \| `unverifiable`), `items`, `reasons` |
+| `verify_evidence_bundle` | Validates file hashes, Git state, AST symbols, command results, and signatures | `bundleId`, `workspacePath?` | `status` (`verified` \| `stale` \| `failed` \| `unverifiable`), `items`, `reasons` |
 | `export_evidence_report` | Generates a shareable Markdown, JSON, or interactive HTML report | `bundleId`, `format` (`markdown` \| `json` \| `html`) | Formatted report ready for PR or handoff |
 
 ---
@@ -164,6 +166,15 @@ node dist/cli.js report bundle_9a41f0bc --format html --output ./reports/evidenc
 
 # Output formatted Markdown to stdout:
 node dist/cli.js report bundle_9a41f0bc --format markdown
+```
+
+### 7. Capture AST Symbols & Semantic Diffs
+```bash
+# Analyze source files, extract symbols, and compute semantic diff against Git HEAD:
+node dist/cli.js ast bundle_9a41f0bc src/index.ts src/utils.ts
+
+# Capture AST evidence for a specific monorepo package without Git HEAD diff:
+node dist/cli.js ast bundle_9a41f0bc src/types.ts --package backend --no-diff
 ```
 
 ### CI/CD Pipeline Integration (GitHub Actions)
@@ -359,12 +370,15 @@ npm run build
 
 ---
 
-## Scope & Boundaries (v0.5.0)
+## Scope & Boundaries (v0.6.0)
 
-### Strictly In Scope for v0.5.0
+### Strictly In Scope for v0.6.0
+- AST structural symbol extraction and semantic diff computation (`capture_ast_evidence` tool and `evidence-mcp ast` CLI).
+- Breaking change detection flagging removed exported symbols, visibility downgrades, and added required parameters.
+- Independent verification of AST code structures in `verify_evidence_bundle` against live on-disk symbols.
 - Multi-workspace and monorepo package support (`register_workspace` tool and `additionalWorkspaces`).
 - CLI workspace management (`evidence-mcp workspace add` and `evidence-mcp workspace list`).
-- Targeted multi-workspace evidence collection for file snapshots, Git inspection, and command execution.
+- Targeted multi-workspace evidence collection for file snapshots, Git inspection, command execution, and AST evidence.
 - Strict per-workspace sandboxing and boundary validation preventing cross-package escapes.
 - Multi-repository and submodule Git state verification.
 - Sandboxed process execution runner (`execute_verified_command` and `evidence-mcp exec`).
@@ -377,13 +391,13 @@ npm run build
 - Deterministic canonical payload serialization (`getCanonicalPayload`) for tamper resistance.
 - Cryptographic signature re-verification in `verify_evidence_bundle` and CLI `verify`.
 - Local file persistence under `.evidence-mcp/bundles/` and key pairs under `.evidence-mcp/keys/`.
-- Standalone CLI interface (`verify`, `list`, `report`, `sign`, `exec`, `workspace`) with CI exit codes.
-- Interactive, responsive, offline-safe HTML report generation with multi-workspace tables and badges.
+- Standalone CLI interface (`verify`, `list`, `report`, `sign`, `exec`, `workspace`, `ast`) with CI exit codes.
+- Interactive, responsive, offline-safe HTML report generation with multi-workspace tables, AST symbol catalogs, and badges.
 - Mandatory evidence-linked assertions.
-- Live verification of file hashes, Git status, and cryptographic signatures.
+- Live verification of file hashes, Git status, AST symbols, and cryptographic signatures.
 - Markdown, JSON, and HTML report exporting.
 
-### Out of Scope for v0.5.0
+### Out of Scope for v0.6.0
 - **Direct Arbitrary Shell Command Execution:** Raw shell strings (e.g. `bash -c "..."`) without security boundaries are strictly rejected.
 - **Remote Publishing / Cloud Syncing:** Evidence bundles are local to the workspace. There is no auto-pushing to remote cloud APIs or external issue trackers.
 
@@ -394,7 +408,8 @@ npm run build
 - **v0.3 (Completed):** Native Ed25519 cryptographic attestation, bundle signing, and tamper verification.
 - **v0.4 (Completed):** Sandboxed execution runner for reproducible, server-verified command execution.
 - **v0.5 (Completed):** Multi-workspace support for cross-repository monorepo changes.
-- **v0.6:** Diff-level syntax tree (AST) evidence capturing.
+- **v0.6 (Completed):** Diff-level syntax tree (AST) evidence capturing with breaking change detection.
+- **v0.7:** Signed reproducible evidence replay & bundle verification proofs.
 
 ---
 

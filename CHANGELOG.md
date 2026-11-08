@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-11-08
+
+### Added
+- **AST & Semantic Diff Evidence Engine:**
+  - Zero-dependency semantic code analysis engine (`src/ast.ts`) extracting symbols, signatures, visibility, parameters, return types, and class/interface/type structures across TypeScript, JavaScript, and JSON files.
+  - New MCP tool `capture_ast_evidence` (Tool 11): records code structural symbols and compares them against Git HEAD (`git show HEAD:<relativePath>`) to detect semantic additions, deletions, and modifications.
+  - Automated breaking change detection: flags API contract violations such as removing exported symbols, visibility downgrades, or adding new required parameters to exported functions (`isBreakingChange: true`).
+  - Independent AST verification: `verify_evidence_bundle` re-parses live files on disk and independently verifies symbol presence and signature consistency; flags bundles as `stale` when symbols or signatures are modified, and `failed` if files are removed or moved.
+  - New CLI command: `evidence-mcp ast <bundleId> <files...> [--workspace <path>] [--package <name>] [--no-diff]` to capture AST symbols and semantic diffs directly from the terminal.
+  - Reporting enhancements: Markdown and responsive HTML reports now include an AST & Semantic Diff Evidence section with interactive symbol catalogs, diff summaries, and breaking change alert banners.
+  - Comprehensive test suite in `test/ast.test.ts` bringing total passing test suite to 125 tests across 11 test suites.
+
 ## [0.5.0] - 2026-11-08
 
 ### Added
