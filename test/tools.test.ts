@@ -30,7 +30,7 @@ describe('Evidence MCP Server Tools Integration', () => {
     await fs.promises.rm(tempWorkspace, { recursive: true, force: true });
   });
 
-  it('exposes all 9 expected tools', async () => {
+  it('exposes all 10 expected tools', async () => {
     const tools = await client.listTools();
     const names = tools.tools.map((t) => t.name);
 
@@ -43,6 +43,7 @@ describe('Evidence MCP Server Tools Integration', () => {
     expect(names).toContain('export_evidence_report');
     expect(names).toContain('sign_evidence_bundle');
     expect(names).toContain('execute_verified_command');
+    expect(names).toContain('register_workspace');
   });
 
   it('executes the full end-to-end evidence lifecycle successfully', async () => {
