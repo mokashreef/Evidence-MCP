@@ -94,20 +94,21 @@ All data is stored locally in human-readable JSON files inside the workspace roo
 
 ---
 
-## Tools Catalog (v0.4.0)
+## Tools Catalog (v0.5.0)
 
-Evidence MCP provides nine focused tools through the Model Context Protocol:
+Evidence MCP provides ten focused tools through the Model Context Protocol:
 
 | Tool | Purpose | Key Inputs | Output |
 |---|---|---|---|
-| `create_evidence_bundle` | Initializes a new evidence bundle for a task | `task`, `workspacePath`, `metadata?` | `bundleId`, initial status (`in_progress`) |
-| `capture_git_evidence` | Safely records Git HEAD, branch, and status | `bundleId`, `workspacePath?` | `evidenceId`, `branch`, `headCommit`, `isClean` |
-| `execute_verified_command` | Spawns an approved command in sandboxed runner and captures verified execution | `bundleId`, `command`, `args?`, `cwd?`, `timeoutMs?` | `evidenceId`, `exitCode`, `durationMs`, `provenance: server_executed` |
-| `record_command_result` | Logs agent-reported command execution result (provenance: agent_reported) | `bundleId`, `command`, `exitCode`, `stdout`, `stderr` | `evidenceId`, `command`, `exitCode`, `provenance` |
-| `snapshot_files` | Computes SHA-256 and size for regular files inside workspace | `bundleId`, `paths` | `snapshots: [{ evidenceId, path, sha256, sizeBytes }]` |
+| `create_evidence_bundle` | Initializes a new evidence bundle for a task | `task`, `workspacePath`, `metadata?`, `additionalWorkspaces?` | `bundleId`, initial status (`in_progress`) |
+| `register_workspace` | Dynamically binds a named monorepo package or secondary repository | `bundleId`, `name`, `path` | `workspaceName`, `workspacePath`, `allWorkspaces` |
+| `capture_git_evidence` | Safely records Git HEAD, branch, and status in targeted workspace | `bundleId`, `workspaceName?`, `workspacePath?` | `evidenceId`, `branch`, `headCommit`, `isClean` |
+| `execute_verified_command` | Spawns an approved command in sandboxed runner and captures verified execution | `bundleId`, `command`, `args?`, `cwd?`, `workspaceName?` | `evidenceId`, `exitCode`, `durationMs`, `provenance: server_executed` |
+| `record_command_result` | Logs agent-reported command execution result (provenance: agent_reported) | `bundleId`, `command`, `exitCode`, `stdout`, `stderr`, `workspaceName?` | `evidenceId`, `command`, `exitCode`, `provenance` |
+| `snapshot_files` | Computes SHA-256 and size for regular files inside workspace boundary | `bundleId`, `paths`, `workspaceName?` | `snapshots: [{ evidenceId, workspaceName, path, sha256 }]` |
 | `add_assertion` | Attaches a claim linked to supporting evidence | `bundleId`, `claim`, `evidenceIds` (min 1) | `assertionId`, `claim`, `evidenceIds` |
 | `sign_evidence_bundle` | Cryptographically signs the bundle using native Ed25519 | `bundleId`, `agentId?`, `privateKeyPath?` | `attestation: { agentId, algorithm, publicKey, signature }` |
-| `verify_evidence_bundle` | Validates file hashes, Git state, command results, and Ed25519 signature | `bundleId`, `workspacePath?` | `status` (`verified` \| `stale` \| `failed` \| `unverifiable`), `items`, `reasons` |
+| `verify_evidence_bundle` | Validates file hashes, Git state, command results, and signatures across workspaces | `bundleId`, `workspacePath?` | `status` (`verified` \| `stale` \| `failed` \| `unverifiable`), `items`, `reasons` |
 | `export_evidence_report` | Generates a shareable Markdown, JSON, or interactive HTML report | `bundleId`, `format` (`markdown` \| `json` \| `html`) | Formatted report ready for PR or handoff |
 
 ---
@@ -129,7 +130,16 @@ node dist/cli.js verify bundle_9a41f0bc
 # Exits with 0 if verified; exits with 1 if stale, failed, or unverifiable
 ```
 
-### 3. Execute an Approved Command in Sandboxed Runner
+### 3. Multi-Workspace & Monorepo Package Management
+```bash
+# Register a monorepo package into an existing evidence bundle:
+node dist/cli.js workspace add bundle_9a41f0bc frontend ./packages/frontend
+
+# List all registered workspaces for a bundle:
+node dist/cli.js workspace list bundle_9a41f0bc
+```
+
+### 4. Execute an Approved Command in Sandboxed Runner
 ```bash
 # Run npm test directly in the workspace and record server_executed evidence:
 node dist/cli.js exec bundle_9a41f0bc npm test
@@ -138,7 +148,7 @@ node dist/cli.js exec bundle_9a41f0bc npm test
 node dist/cli.js exec bundle_9a41f0bc vitest run --cwd packages/core --timeout 45000
 ```
 
-### 4. Cryptographically Sign a Bundle
+### 5. Cryptographically Sign a Bundle
 ```bash
 # Sign using workspace default Ed25519 key (auto-generated if absent):
 node dist/cli.js sign bundle_9a41f0bc
@@ -147,7 +157,7 @@ node dist/cli.js sign bundle_9a41f0bc
 node dist/cli.js sign bundle_9a41f0bc --key /path/to/agent_private.pem
 ```
 
-### 5. Export an Interactive HTML or Markdown Report
+### 6. Export an Interactive HTML or Markdown Report
 ```bash
 # Export standalone, offline-safe interactive HTML report:
 node dist/cli.js report bundle_9a41f0bc --format html --output ./reports/evidence.html
@@ -349,30 +359,31 @@ npm run build
 
 ---
 
-## Scope & Boundaries (v0.4.0)
+## Scope & Boundaries (v0.5.0)
 
-### Strictly In Scope for v0.4.0
+### Strictly In Scope for v0.5.0
+- Multi-workspace and monorepo package support (`register_workspace` tool and `additionalWorkspaces`).
+- CLI workspace management (`evidence-mcp workspace add` and `evidence-mcp workspace list`).
+- Targeted multi-workspace evidence collection for file snapshots, Git inspection, and command execution.
+- Strict per-workspace sandboxing and boundary validation preventing cross-package escapes.
+- Multi-repository and submodule Git state verification.
 - Sandboxed process execution runner (`execute_verified_command` and `evidence-mcp exec`).
 - Strict security allowlist for developer tooling (`npm`, `npx`, `node`, `git`, `tsc`, `vitest`, `cargo`, `go`, etc.) and blocklist for dangerous interpreters/subshells and downloaders (`sh`, `bash`, `powershell`, `rm`, `curl`, `wget`).
 - Zero shell injection vulnerability (`shell: false` across all platforms).
 - Automatic environment variable sanitization (scrubbing secrets, API tokens, passwords, private keys).
-- Working directory confinement within workspace boundaries.
 - Resource bounds (timeouts up to 120s with process killing, 512KB stdout/stderr buffer caps).
 - Independent verification of server-executed commands in `verify_evidence_bundle` (exit 0 = verified, exit != 0 = failed).
 - Native Ed25519 asymmetric cryptographic attestation and bundle signing (`sign_evidence_bundle` and `evidence-mcp sign`).
 - Deterministic canonical payload serialization (`getCanonicalPayload`) for tamper resistance.
 - Cryptographic signature re-verification in `verify_evidence_bundle` and CLI `verify`.
 - Local file persistence under `.evidence-mcp/bundles/` and key pairs under `.evidence-mcp/keys/`.
-- Standalone CLI interface (`verify`, `list`, `report`, `sign`, `exec`) with CI exit codes.
-- Interactive, responsive, offline-safe HTML report generation with provenance and attestation badges.
-- Safe Git state capture (read-only).
-- Recording command outputs provided by the agent (explicitly marked with `agent_reported` provenance).
-- Workspace-confined SHA-256 file snapshots (regular files only; symlinks rejected).
+- Standalone CLI interface (`verify`, `list`, `report`, `sign`, `exec`, `workspace`) with CI exit codes.
+- Interactive, responsive, offline-safe HTML report generation with multi-workspace tables and badges.
 - Mandatory evidence-linked assertions.
 - Live verification of file hashes, Git status, and cryptographic signatures.
 - Markdown, JSON, and HTML report exporting.
 
-### Out of Scope for v0.4.0
+### Out of Scope for v0.5.0
 - **Direct Arbitrary Shell Command Execution:** Raw shell strings (e.g. `bash -c "..."`) without security boundaries are strictly rejected.
 - **Remote Publishing / Cloud Syncing:** Evidence bundles are local to the workspace. There is no auto-pushing to remote cloud APIs or external issue trackers.
 
@@ -382,7 +393,7 @@ npm run build
 
 - **v0.3 (Completed):** Native Ed25519 cryptographic attestation, bundle signing, and tamper verification.
 - **v0.4 (Completed):** Sandboxed execution runner for reproducible, server-verified command execution.
-- **v0.5:** Multi-workspace support for cross-repository monorepo changes.
+- **v0.5 (Completed):** Multi-workspace support for cross-repository monorepo changes.
 - **v0.6:** Diff-level syntax tree (AST) evidence capturing.
 
 ---

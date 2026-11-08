@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-11-08
+
+### Added
+- **Multi-Workspace & Monorepo Support:**
+  - Full support for multi-package and monorepo architectures: bundles can now track evidence across multiple named workspaces (e.g. `root`, `frontend`, `backend`, `core`).
+  - New MCP tool `register_workspace` (Tool 10): dynamically binds named package roots or secondary repositories to an active bundle.
+  - Monorepo initialization: `create_evidence_bundle` supports optional `additionalWorkspaces` map to declare package roots upfront.
+  - New CLI commands: `evidence-mcp workspace add <bundleId> <name> <path>` and `evidence-mcp workspace list <bundleId>`.
+  - Targeted evidence tools: `snapshot_files`, `capture_git_evidence`, `execute_verified_command`, and `record_command_result` accept optional `workspaceName` targeting specific sub-projects.
+  - Strict workspace-confined sandboxing: path traversal and symlink boundary validations are strictly enforced relative to each target workspace's root.
+  - Multi-repository Git inspection: verifies independent Git commit trees and working directories across submodules and secondary repositories.
+  - Reporting: Markdown and HTML reports include a Registered Workspaces table and display workspace tags on all evidence entries.
+  - Comprehensive test suite in `test/multi-workspace.test.ts` bringing total passing test suite to 114 tests across 10 test suites.
+
 ## [0.4.0] - 2026-11-08
 
 ### Added
