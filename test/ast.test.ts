@@ -1,0 +1,363 @@
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import { execSync } from 'node:child_process';
+import {
+  parseSourceSymbols,
+  computeSemanticDiff,
+  captureFileAstEvidence,
+  detectLanguage,
+  parseParameters,
+} from '../src/ast.js';
+import { createEvidenceServer } from '../src/server.js';
+import { loadBundle, saveBundle, generateId } from '../src/storage.js';
+import { verifyEvidenceBundle } from '../src/verifier.js';
+import { exportEvidenceReport } from '../src/reporter.js';
+import { runCli } from '../src/cli.js';
+import { EvidenceBundle } from '../src/types.js';
+
+describe('AST & Semantic Diff Evidence Engine', () => {
+  let tempDir: string;
+
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'evidence-ast-test-'));
+  });
+
+  afterEach(() => {
+    try {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    } catch {
+      // Ignore cleanup errors on Windows
+    }
+  });
+
+  describe('detectLanguage', () => {
+    it('detects typescript, javascript, json, and others', () => {
+      expect(detectLanguage('index.ts')).toBe('typescript');
+      expect(detectLanguage('component.tsx')).toBe('typescript');
+      expect(detectLanguage('module.mts')).toBe('typescript');
+      expect(detectLanguage('app.js')).toBe('javascript');
+      expect(detectLanguage('app.jsx')).toBe('javascript');
+      expect(detectLanguage('data.json')).toBe('json');
+      expect(detectLanguage('script.py')).toBe('python');
+      expect(detectLanguage('styles.css')).toBe('other');
+    });
+  });
+
+  describe('parseParameters', () => {
+    it('correctly parses parameters with nested types and defaults', () => {
+      const raw = 'a: string, b?: number, callback: (res: { ok: boolean }) => void, def = 42';
+      const parsed = parseParameters(raw);
+
+      expect(parsed.length).toBe(4);
+      expect(parsed[0].name).toBe('a');
+      expect(parsed[0].optional).toBe(false);
+      expect(parsed[0].type).toBe('string');
+
+      expect(parsed[1].name).toBe('b');
+      expect(parsed[1].optional).toBe(true);
+      expect(parsed[1].type).toBe('number');
+
+      expect(parsed[2].name).toBe('callback');
+      expect(parsed[2].type).toBe('(res: { ok: boolean }) => void');
+
+      expect(parsed[3].name).toBe('def');
+      expect(parsed[3].defaultValue).toBe('42');
+      expect(parsed[3].optional).toBe(true);
+    });
+  });
+
+  describe('parseSourceSymbols', () => {
+    it('extracts exported and internal TypeScript functions, interfaces, types, and classes', () => {
+      const source = `
+        export interface UserConfig {
+          id: string;
+          name?: string;
+          roles: string[];
+        }
+
+        export type Status = 'active' | 'inactive';
+
+        export enum RoleType {
+          Admin = 'ADMIN',
+          Guest = 'GUEST',
+        }
+
+        export class AuthService {
+          private token: string;
+          public validate(user: string): boolean {
+            return true;
+          }
+        }
+
+        export async function loginUser(username: string, pass: string): Promise<boolean> {
+          return true;
+        }
+
+        export const calculateSum = (a: number, b: number = 0): number => a + b;
+
+        function internalHelper(data: any): void {}
+      `;
+
+      const symbols = parseSourceSymbols(source, 'auth.ts');
+      const symbolNames = symbols.map((s) => s.name);
+
+      expect(symbolNames).toContain('UserConfig');
+      expect(symbolNames).toContain('Status');
+      expect(symbolNames).toContain('RoleType');
+      expect(symbolNames).toContain('AuthService');
+      expect(symbolNames).toContain('loginUser');
+      expect(symbolNames).toContain('calculateSum');
+      expect(symbolNames).toContain('internalHelper');
+
+      const userConfig = symbols.find((s) => s.name === 'UserConfig')!;
+      expect(userConfig.kind).toBe('interface');
+      expect(userConfig.isExported).toBe(true);
+
+      const login = symbols.find((s) => s.name === 'loginUser')!;
+      expect(login.kind).toBe('function');
+      expect(login.isExported).toBe(true);
+      expect(login.isAsync).toBe(true);
+      expect(login.returnType).toBe('Promise<boolean>');
+      expect(login.parameters?.length).toBe(2);
+
+      const internal = symbols.find((s) => s.name === 'internalHelper')!;
+      expect(internal.kind).toBe('function');
+      expect(internal.isExported).toBe(false);
+    });
+
+    it('extracts top-level keys from JSON files', () => {
+      const jsonSource = JSON.stringify({
+        name: 'evidence-mcp',
+        version: '0.6.0',
+        scripts: { test: 'vitest' },
+      });
+
+      const symbols = parseSourceSymbols(jsonSource, 'package.json');
+      expect(symbols.length).toBe(3);
+      expect(symbols.map((s) => s.name)).toEqual(['name', 'version', 'scripts']);
+    });
+  });
+
+  describe('computeSemanticDiff', () => {
+    it('detects added and removed symbols', () => {
+      const prevSource = `
+        export function foo(): void {}
+        export function bar(): void {}
+      `;
+      const currSource = `
+        export function foo(): void {}
+        export function baz(): void {}
+      `;
+
+      const prev = parseSourceSymbols(prevSource, 'test.ts');
+      const curr = parseSourceSymbols(currSource, 'test.ts');
+
+      const diff = computeSemanticDiff(prev, curr, 'test.ts');
+      expect(diff.hasChanges).toBe(true);
+      expect(diff.removedSymbols.map((s) => s.name)).toEqual(['bar']);
+      expect(diff.addedSymbols.map((s) => s.name)).toEqual(['baz']);
+      // Removing an exported function is a breaking change
+      expect(diff.isBreakingChange).toBe(true);
+    });
+
+    it('detects breaking changes when adding required parameters to exported functions', () => {
+      const prevSource = `export function greet(name: string): string { return name; }`;
+      const currSource = `export function greet(name: string, greeting: string): string { return greeting + name; }`;
+
+      const prev = parseSourceSymbols(prevSource, 'greet.ts');
+      const curr = parseSourceSymbols(currSource, 'greet.ts');
+
+      const diff = computeSemanticDiff(prev, curr, 'greet.ts');
+      expect(diff.hasChanges).toBe(true);
+      expect(diff.isBreakingChange).toBe(true);
+      expect(diff.modifiedSymbols.length).toBe(1);
+      expect(diff.modifiedSymbols[0].changes).toContain('New required parameter added to exported signature.');
+    });
+
+    it('treats adding optional parameters as non-breaking', () => {
+      const prevSource = `export function greet(name: string): string { return name; }`;
+      const currSource = `export function greet(name: string, greeting?: string): string { return (greeting || 'Hi') + name; }`;
+
+      const prev = parseSourceSymbols(prevSource, 'greet.ts');
+      const curr = parseSourceSymbols(currSource, 'greet.ts');
+
+      const diff = computeSemanticDiff(prev, curr, 'greet.ts');
+      expect(diff.hasChanges).toBe(true);
+      expect(diff.isBreakingChange).toBe(false);
+      expect(diff.modifiedSymbols.length).toBe(1);
+    });
+  });
+
+  describe('captureFileAstEvidence with Git repository', () => {
+    it('captures AST evidence and computes semantic diff against Git HEAD', async () => {
+      // Initialize Git repo in tempDir
+      execSync('git init -b main', { cwd: tempDir, stdio: 'ignore' });
+      execSync('git config user.name "Test Agent"', { cwd: tempDir, stdio: 'ignore' });
+      execSync('git config user.email "test@example.com"', { cwd: tempDir, stdio: 'ignore' });
+
+      const filePath = path.join(tempDir, 'service.ts');
+      fs.writeFileSync(
+        filePath,
+        `export function executeTask(id: string): boolean { return true; }\n`
+      );
+
+      execSync('git add service.ts', { cwd: tempDir, stdio: 'ignore' });
+      execSync('git commit -m "feat: initial service"', { cwd: tempDir, stdio: 'ignore' });
+
+      // Modify file in working tree: add new function
+      fs.writeFileSync(
+        filePath,
+        `export function executeTask(id: string): boolean { return true; }\n` +
+          `export function cancelTask(id: string): void {}\n`
+      );
+
+      const evidence = await captureFileAstEvidence({
+        filePath: 'service.ts',
+        workspacePath: tempDir,
+        compareWithGitHead: true,
+      });
+
+      expect(evidence.filePath).toBe('service.ts');
+      expect(evidence.language).toBe('typescript');
+      expect(evidence.symbolsCount).toBe(2);
+      expect(evidence.diff).toBeDefined();
+      expect(evidence.diff?.hasChanges).toBe(true);
+      expect(evidence.diff?.isBreakingChange).toBe(false);
+      expect(evidence.diff?.addedSymbols.map((s) => s.name)).toEqual(['cancelTask']);
+      expect(evidence.diff?.removedSymbols.length).toBe(0);
+    });
+
+    it('rejects path traversal outside workspace', async () => {
+      await expect(
+        captureFileAstEvidence({
+          filePath: '../external.ts',
+          workspacePath: tempDir,
+        })
+      ).rejects.toThrow(/outside/i);
+    });
+  });
+
+  describe('MCP Tool & Verification Integration', () => {
+    it('captures AST evidence via MCP server, verifies cleanly, and detects stale on symbol alteration', async () => {
+      // Setup Git repo
+      execSync('git init -b main', { cwd: tempDir, stdio: 'ignore' });
+      execSync('git config user.name "Test Agent"', { cwd: tempDir, stdio: 'ignore' });
+      execSync('git config user.email "test@example.com"', { cwd: tempDir, stdio: 'ignore' });
+
+      const mathFile = path.join(tempDir, 'math.ts');
+      fs.writeFileSync(
+        mathFile,
+        `export function add(a: number, b: number): number { return a + b; }\n`
+      );
+      execSync('git add math.ts', { cwd: tempDir, stdio: 'ignore' });
+      execSync('git commit -m "feat: math lib"', { cwd: tempDir, stdio: 'ignore' });
+
+      const server = createEvidenceServer();
+
+      // Create bundle
+      const createRes = await (server as any)._registeredTools['create_evidence_bundle'].handler({
+        task: 'Implement math functions with AST verification',
+        workspacePath: tempDir,
+      });
+      const createData = JSON.parse(createRes.content[0].text);
+      const bundleId = createData.bundleId;
+
+      // Capture AST evidence via MCP tool
+      const astRes = await (server as any)._registeredTools['capture_ast_evidence'].handler({
+        bundleId,
+        files: ['math.ts'],
+        workspacePath: tempDir,
+      });
+      expect(astRes.isError).toBeUndefined();
+      const astData = JSON.parse(astRes.content[0].text);
+      expect(astData.astEvidence.length).toBe(1);
+      expect(astData.astEvidence[0].symbolsCount).toBe(1);
+      const astEvidenceId = astData.astEvidence[0].id;
+
+      // Add assertion linking to AST evidence
+      await (server as any)._registeredTools['add_assertion'].handler({
+        bundleId,
+        claim: 'math.ts exports add function with valid signatures',
+        evidenceIds: [astEvidenceId],
+        workspacePath: tempDir,
+      });
+
+      // Verify bundle: should be verified
+      const verifyRes1 = await (server as any)._registeredTools['verify_evidence_bundle'].handler({
+        bundleId,
+        workspacePath: tempDir,
+      });
+      const verifyData1 = JSON.parse(verifyRes1.content[0].text);
+      expect(verifyData1.status).toBe('verified');
+      expect(verifyData1.items.some((i: any) => i.type === 'ast' && i.status === 'verified')).toBe(true);
+
+      // Now alter the file on disk: rename the function so AST symbols no longer match
+      fs.writeFileSync(
+        mathFile,
+        `export function addNumbers(a: number, b: number): number { return a + b; }\n`
+      );
+
+      // Verify bundle again: should be stale
+      const verifyRes2 = await (server as any)._registeredTools['verify_evidence_bundle'].handler({
+        bundleId,
+        workspacePath: tempDir,
+      });
+      const verifyData2 = JSON.parse(verifyRes2.content[0].text);
+      expect(verifyData2.status).toBe('stale');
+      expect(verifyData2.reasons.some((r: string) => r.includes('AST evidence'))).toBe(true);
+    });
+  });
+
+  describe('CLI and Reporting Integration', () => {
+    it('supports evidence-mcp ast command and formats Markdown & HTML reports', async () => {
+      // Setup Git repo
+      execSync('git init -b main', { cwd: tempDir, stdio: 'ignore' });
+      execSync('git config user.name "Test Agent"', { cwd: tempDir, stdio: 'ignore' });
+      execSync('git config user.email "test@example.com"', { cwd: tempDir, stdio: 'ignore' });
+
+      const libFile = path.join(tempDir, 'lib.ts');
+      fs.writeFileSync(
+        libFile,
+        `export interface Config { timeout: number; }\nexport function run(cfg: Config): void {}\n`
+      );
+      execSync('git add lib.ts', { cwd: tempDir, stdio: 'ignore' });
+      execSync('git commit -m "initial lib"', { cwd: tempDir, stdio: 'ignore' });
+
+      const bundle: EvidenceBundle = {
+        id: generateId('bundle'),
+        task: 'CLI AST Test',
+        workspacePath: tempDir,
+        status: 'in_progress',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        evidence: {},
+        assertions: [],
+      };
+      await saveBundle(bundle);
+
+      // Run CLI ast command
+      const code = await runCli(['ast', bundle.id, 'lib.ts', '--workspace', tempDir]);
+      expect(code).toBe(0);
+
+      // Load bundle and verify AST evidence was added
+      const loaded = await loadBundle(bundle.id, tempDir);
+      expect(loaded.evidence.ast?.length).toBe(1);
+      expect(loaded.evidence.ast![0].symbolsCount).toBe(2);
+
+      // Verify Markdown report contains AST section
+      const mdReport = exportEvidenceReport(loaded, 'markdown');
+      expect(mdReport).toContain('AST & Semantic Diff Evidence');
+      expect(mdReport).toContain('`lib.ts`');
+      expect(mdReport).toContain('`interface`');
+      expect(mdReport).toContain('`run`');
+
+      // Verify HTML report contains AST card
+      const htmlReport = exportEvidenceReport(loaded, 'html');
+      expect(htmlReport).toContain('AST & Semantic Diff Evidence');
+      expect(htmlReport).toContain('lib.ts');
+      expect(htmlReport).toContain('Clean (No Diff)');
+    });
+  });
+});
