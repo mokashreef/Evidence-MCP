@@ -1,17 +1,18 @@
 #!/usr/bin/env node
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { createEvidenceServer } from './server.js';
-import { listBundles, loadBundle, saveBundle, generateId, resolveWorkspaceForBundle } from './storage.js';
+import { listBundles, loadBundle, saveBundle, generateId, resolveWorkspaceForBundle, loadProof } from './storage.js';
 import { verifyEvidenceBundle } from './verifier.js';
 import { exportEvidenceReport } from './reporter.js';
 import { signEvidenceBundle } from './attestation.js';
 import { executeSandboxedCommand } from './runner.js';
 import { captureFileAstEvidence } from './ast.js';
-import { CommandEvidence } from './types.js';
+import { createVerificationProof, verifyProofSignature, replayEvidenceBundle } from './proof.js';
+import { CommandEvidence, VerificationProof, EvidenceBundle } from './types.js';
 import path from 'node:path';
 import fs from 'node:fs';
 
-const VERSION = '0.6.0';
+const VERSION = '0.7.0';
 
 export function printHelp(): void {
   console.log(`
@@ -28,17 +29,21 @@ Usage:
   evidence-mcp workspace add <bundleId> <name> <p>  Register a package or sub-workspace in bundle
   evidence-mcp workspace list <bundleId>            List all workspaces registered in bundle
   evidence-mcp ast <bundleId> <files...> [options]  Capture AST symbols and semantic diff for files
+  evidence-mcp proof create <bundleId> [options]    Export a signed Ed25519 verification proof
+  evidence-mcp proof verify <file|id> [options]     Verify cryptographic proof authenticity & digest
+  evidence-mcp replay <bundleId> [options]          Replay evidence sequentially with reproducibility check
   evidence-mcp --help, -h                           Show this help message
   evidence-mcp --version, -v                        Show version number
 
 Options:
   --workspace, -w <path>   Workspace directory path (defaults to current working directory)
   --format, -f <format>    Report format: markdown, json, or html (default: markdown)
-  --output, -o <file>      Write exported report directly to file
+  --output, -o <file>      Write exported report or proof directly to file
   --key, -k <file>         Private key file for Ed25519 signing (auto-generates if omitted)
   --timeout <ms>           Execution timeout in milliseconds (default: 30000)
   --cwd <path>             Working directory relative to workspace root
   --no-diff                Do not compute semantic diff against Git HEAD
+  --re-execute             Re-execute server commands during replay to verify reproducibility
 `);
 }
 
@@ -467,6 +472,179 @@ export async function runCli(args: string[]): Promise<number> {
       return 0;
     } catch (err: unknown) {
       console.error(`AST analysis error: ${(err as Error).message}`);
+      return 1;
+    }
+  }
+
+  // 8. Command: proof create|verify
+  if (firstArg === 'proof') {
+    const subAction = args[1];
+    if (subAction === 'create') {
+      const bundleId = args[2];
+      if (!bundleId) {
+        console.error('Error: bundleId is required.\nUsage: evidence-mcp proof create <bundleId> [options]');
+        return 1;
+      }
+
+      let workspace: string | undefined;
+      let keyFile: string | undefined;
+      let outputFile: string | undefined;
+
+      for (let i = 3; i < args.length; i++) {
+        if ((args[i] === '--workspace' || args[i] === '-w') && args[i + 1]) {
+          workspace = args[++i];
+        } else if ((args[i] === '--key' || args[i] === '-k') && args[i + 1]) {
+          keyFile = args[++i];
+        } else if ((args[i] === '--output' || args[i] === '-o') && args[i + 1]) {
+          outputFile = args[++i];
+        }
+      }
+
+      try {
+        const bundle = await loadBundle(bundleId, workspace);
+        let privateKeyPem: string | undefined;
+        if (keyFile) {
+          privateKeyPem = await fs.promises.readFile(path.resolve(keyFile), 'utf8');
+        }
+
+        const verification = await verifyEvidenceBundle(bundle);
+        const proof = await createVerificationProof({
+          bundle,
+          verification,
+          workspacePath: bundle.workspacePath,
+          privateKeyPem,
+        });
+
+        console.log(`\nVerification Proof Created: ${proof.id}`);
+        console.log('================================================================================');
+        console.log(`Bundle ID:     ${proof.bundleId}`);
+        console.log(`Verdict:       ${proof.verdict.toUpperCase()}`);
+        console.log(`Bundle Digest: ${proof.bundleDigest}`);
+        console.log(`Signer:        ${proof.signer.keyFingerprint}`);
+        console.log(`Verified At:   ${proof.verifiedAt}`);
+        console.log(`Items Checked: ${proof.itemCount}`);
+        console.log('================================================================================\n');
+
+        if (outputFile) {
+          const outPath = path.resolve(outputFile);
+          await fs.promises.mkdir(path.dirname(outPath), { recursive: true });
+          await fs.promises.writeFile(outPath, JSON.stringify(proof, null, 2), 'utf8');
+          console.log(`Proof written to: ${outPath}`);
+        }
+
+        return proof.verdict === 'verified' ? 0 : 1;
+      } catch (err: unknown) {
+        console.error(`Proof error: ${(err as Error).message}`);
+        return 1;
+      }
+    } else if (subAction === 'verify') {
+      const proofTarget = args[2];
+      if (!proofTarget) {
+        console.error('Error: proof target is required.\nUsage: evidence-mcp proof verify <proofFile|proofId> [options]');
+        return 1;
+      }
+
+      let workspace: string | undefined;
+      let bundleId: string | undefined;
+
+      for (let i = 3; i < args.length; i++) {
+        if ((args[i] === '--workspace' || args[i] === '-w') && args[i + 1]) {
+          workspace = args[++i];
+        } else if (args[i] === '--bundle' && args[i + 1]) {
+          bundleId = args[++i];
+        }
+      }
+
+      try {
+        let proof: VerificationProof;
+        if (fs.existsSync(proofTarget)) {
+          const content = await fs.promises.readFile(path.resolve(proofTarget), 'utf8');
+          proof = JSON.parse(content) as VerificationProof;
+        } else {
+          proof = await loadProof(proofTarget, workspace);
+        }
+
+        const targetBundleId = bundleId || proof.bundleId;
+        let bundle: EvidenceBundle | undefined;
+        try {
+          bundle = await loadBundle(targetBundleId, workspace);
+        } catch {
+          // Offline verification without live bundle
+        }
+
+        const check = verifyProofSignature(proof, bundle);
+
+        console.log(`\nVerification Proof Inspection: ${proof.id}`);
+        console.log('================================================================================');
+        console.log(`Valid Signature: ${check.valid ? 'YES' : 'NO'}`);
+        console.log(`Verdict:         ${proof.verdict.toUpperCase()}`);
+        console.log(`Signer:          ${proof.signer.keyFingerprint}`);
+        console.log(`Verified At:     ${proof.verifiedAt}`);
+        if (check.bundleDigestMatches !== undefined) {
+          console.log(`Bundle Matches:  ${check.bundleDigestMatches ? 'YES (Untampered)' : 'NO (Tampered)'}`);
+        }
+        if (check.reason) {
+          console.log(`Reason:          ${check.reason}`);
+        }
+        console.log('================================================================================\n');
+
+        return check.valid && check.bundleDigestMatches !== false ? 0 : 1;
+      } catch (err: unknown) {
+        console.error(`Proof verification error: ${(err as Error).message}`);
+        return 1;
+      }
+    }
+  }
+
+  // 9. Command: replay <bundleId> [--re-execute] [--workspace <path>]
+  if (firstArg === 'replay') {
+    const bundleId = args[1];
+    if (!bundleId) {
+      console.error('Error: bundleId is required.\nUsage: evidence-mcp replay <bundleId> [options]');
+      return 1;
+    }
+
+    let workspace: string | undefined;
+    let reExecuteCommands = false;
+
+    for (let i = 2; i < args.length; i++) {
+      if ((args[i] === '--workspace' || args[i] === '-w') && args[i + 1]) {
+        workspace = args[++i];
+      } else if (args[i] === '--re-execute') {
+        reExecuteCommands = true;
+      }
+    }
+
+    try {
+      const bundle = await loadBundle(bundleId, workspace);
+      console.log(`\nReplaying Evidence for Bundle: ${bundle.id}`);
+      console.log(`Task: ${bundle.task}`);
+      console.log('================================================================================');
+
+      const replayResult = await replayEvidenceBundle(bundle, {
+        reExecuteCommands,
+        workspacePath: workspace,
+      });
+
+      for (const step of replayResult.steps) {
+        const badge = step.status === 'passed' ? '[PASS]' : step.status === 'diverged' ? '[DIVERGED]' : '[FAIL]';
+        console.log(`${step.index.toString().padStart(2)}. ${badge.padEnd(11)} ${step.description}`);
+        console.log(`    ${step.details}`);
+        if (step.reproducedExecution) {
+          console.log(`    Reproduced in ${step.reproducedExecution.durationMs}ms (Exit: ${step.reproducedExecution.exitCode})`);
+        }
+      }
+
+      console.log('--------------------------------------------------------------------------------');
+      console.log(
+        `Replay Summary: ${replayResult.passedSteps}/${replayResult.totalSteps} passed (${replayResult.divergedSteps} diverged).`
+      );
+      console.log(`Reproducibility: ${replayResult.isReproducible ? 'REPRODUCIBLE' : 'DIVERGED'}`);
+      console.log('================================================================================\n');
+
+      return replayResult.isReproducible ? 0 : 1;
+    } catch (err: unknown) {
+      console.error(`Replay error: ${(err as Error).message}`);
       return 1;
     }
   }

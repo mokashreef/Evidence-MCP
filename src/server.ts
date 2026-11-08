@@ -16,6 +16,7 @@ import {
   generateId,
   saveBundle,
   loadBundle,
+  loadProof,
   registerBundleWorkspace,
   resolveWorkspaceForBundle,
 } from './storage.js';
@@ -24,11 +25,12 @@ import { exportEvidenceReport } from './reporter.js';
 import { signEvidenceBundle } from './attestation.js';
 import { executeSandboxedCommand } from './runner.js';
 import { captureFileAstEvidence } from './ast.js';
+import { createVerificationProof, verifyProofSignature } from './proof.js';
 
 export function createEvidenceServer(): McpServer {
   const server = new McpServer({
     name: 'evidence-mcp',
-    version: '0.6.0',
+    version: '0.7.0',
   });
 
   // 1. create_evidence_bundle
@@ -739,6 +741,122 @@ export function createEvidenceServer(): McpServer {
         return {
           isError: true,
           content: [{ type: 'text', text: `Failed to capture AST evidence: ${message}` }],
+        };
+      }
+    }
+  );
+
+  // 12. export_verification_proof
+  server.tool(
+    'export_verification_proof',
+    'Verifies an evidence bundle and issues a cryptographically signed, portable Ed25519 verification proof saved to .evidence-mcp/proofs/.',
+    {
+      bundleId: z.string().min(1).describe('The unique identifier of the evidence bundle to verify and certify.'),
+      privateKeyPem: z.string().optional().describe('Optional PEM-encoded private key for signing (defaults to local agent key).'),
+      workspacePath: z.string().optional().describe('Optional workspace path hint to locate the bundle.'),
+    },
+    async ({ bundleId, privateKeyPem, workspacePath }) => {
+      try {
+        const bundle = await loadBundle(bundleId, workspacePath);
+        const verification = await verifyEvidenceBundle(bundle);
+        const proof = await createVerificationProof({
+          bundle,
+          verification,
+          workspacePath: bundle.workspacePath,
+          privateKeyPem,
+        });
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  message: `Verification proof exported and cryptographically signed successfully.`,
+                  proofId: proof.id,
+                  bundleId: proof.bundleId,
+                  verdict: proof.verdict,
+                  bundleDigest: proof.bundleDigest,
+                  signerFingerprint: proof.signer.keyFingerprint,
+                  signature: proof.signature,
+                  itemCount: proof.itemCount,
+                  verifiedAt: proof.verifiedAt,
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `Failed to export verification proof: ${message}` }],
+        };
+      }
+    }
+  );
+
+  // 13. verify_replay_proof
+  server.tool(
+    'verify_replay_proof',
+    'Verifies the cryptographic signature and bundle consistency of an exported verification proof.',
+    {
+      proofId: z.string().optional().describe('The ID of the proof stored in .evidence-mcp/proofs/ (e.g. "proof_12345678").'),
+      proofJson: z.string().optional().describe('Raw JSON string of a verification proof.'),
+      bundleId: z.string().optional().describe('Optional bundle ID to verify consistency with live workspace state.'),
+      workspacePath: z.string().optional().describe('Optional workspace path hint to locate bundle and proof.'),
+    },
+    async ({ proofId, proofJson, bundleId, workspacePath }) => {
+      try {
+        let proofObj: any;
+        if (proofJson) {
+          proofObj = JSON.parse(proofJson);
+        } else if (proofId) {
+          proofObj = await loadProof(proofId, workspacePath);
+        } else {
+          throw new Error('Either proofId or proofJson must be supplied.');
+        }
+
+        const targetBundleId = bundleId || proofObj.bundleId;
+        let bundle: EvidenceBundle | undefined;
+        if (targetBundleId) {
+          try {
+            bundle = await loadBundle(targetBundleId, workspacePath);
+          } catch {
+            // Bundle may not exist if verifying proof offline
+          }
+        }
+
+        const check = verifyProofSignature(proofObj, bundle);
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  proofId: proofObj.id,
+                  bundleId: proofObj.bundleId,
+                  valid: check.valid,
+                  verdict: proofObj.verdict,
+                  signerFingerprint: proofObj.signer.keyFingerprint,
+                  bundleDigestMatches: check.bundleDigestMatches,
+                  reason: check.reason,
+                  verifiedAt: proofObj.verifiedAt,
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `Failed to verify proof: ${message}` }],
         };
       }
     }

@@ -72,6 +72,7 @@ export function getCanonicalPayload(bundle: EvidenceBundle): Buffer {
     id: bundle.id,
     task: bundle.task,
     workspacePath: path.resolve(bundle.workspacePath).replace(/\\/g, '/'),
+    workspaces: bundle.workspaces || { root: path.resolve(bundle.workspacePath).replace(/\\/g, '/') },
     createdAt: bundle.createdAt,
     evidence: {
       git: (bundle.evidence.git || []).map((g) => ({
@@ -96,6 +97,12 @@ export function getCanonicalPayload(bundle: EvidenceBundle): Buffer {
         sha256: f.sha256,
         sizeBytes: f.sizeBytes,
       })),
+      ast: (bundle.evidence.ast || []).map((a) => ({
+        id: a.id,
+        filePath: a.filePath.replace(/\\/g, '/'),
+        language: a.language,
+        symbolsCount: a.symbolsCount,
+      })),
     },
     assertions: (bundle.assertions || []).map((a) => ({
       id: a.id,
@@ -111,7 +118,7 @@ export function getCanonicalPayload(bundle: EvidenceBundle): Buffer {
 /**
  * Canonical JSON stringifier that sorts all keys alphabetically.
  */
-function canonicalStringify(obj: unknown): string {
+export function canonicalStringify(obj: unknown): string {
   if (obj === null || typeof obj !== 'object') {
     return JSON.stringify(obj);
   }

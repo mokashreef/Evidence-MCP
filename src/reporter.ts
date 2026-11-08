@@ -1,4 +1,4 @@
-import { EvidenceBundle, VerificationResult } from './types.js';
+import { EvidenceBundle, VerificationResult, VerificationProof } from './types.js';
 
 /**
  * Escapes characters for safe inclusion in HTML.
@@ -18,13 +18,15 @@ export function escapeHtml(str: string): string {
 export function exportEvidenceReport(
   bundle: EvidenceBundle,
   format: 'markdown' | 'json' | 'html',
-  verification?: VerificationResult
+  verification?: VerificationResult,
+  proof?: VerificationProof
 ): string {
   if (format === 'json') {
     return JSON.stringify(
       {
         bundle,
         verification: verification || null,
+        proof: proof || null,
       },
       null,
       2
@@ -32,7 +34,7 @@ export function exportEvidenceReport(
   }
 
   if (format === 'html') {
-    return generateHtmlReport(bundle, verification);
+    return generateHtmlReport(bundle, verification, proof);
   }
 
   // Markdown format
@@ -61,6 +63,11 @@ export function exportEvidenceReport(
       `**Cryptographic Attestation:** 🔏 \`${bundle.attestation.algorithm.toUpperCase()}\` (Key: \`${bundle.attestation.keyFingerprint.slice(0, 16)}...\`)`
     );
     lines.push(`**Signed At:** \`${bundle.attestation.signedAt}\``);
+  }
+  if (proof) {
+    lines.push(
+      `**Verification Proof:** 🛡️ \`${proof.id}\` (Verdict: \`${proof.verdict.toUpperCase()}\`, Signer: \`${proof.signer.keyFingerprint.slice(0, 16)}...\`)`
+    );
   }
   lines.push('');
 
@@ -293,7 +300,11 @@ export function exportEvidenceReport(
 /**
  * Generates a self-contained, clean, responsive HTML report.
  */
-function generateHtmlReport(bundle: EvidenceBundle, verification?: VerificationResult): string {
+function generateHtmlReport(
+  bundle: EvidenceBundle,
+  verification?: VerificationResult,
+  proof?: VerificationProof
+): string {
   const statusColor =
     bundle.status === 'verified'
       ? '#2da44e'
@@ -671,6 +682,11 @@ function generateHtmlReport(bundle: EvidenceBundle, verification?: VerificationR
       ${
         bundle.attestation
           ? `<div class="meta-item"><span class="meta-label">Attestation</span><span>🔏 ${escapeHtml(bundle.attestation.algorithm.toUpperCase())} (<code>${escapeHtml(bundle.attestation.keyFingerprint.slice(0, 12))}...</code>)</span></div>`
+          : ''
+      }
+      ${
+        proof
+          ? `<div class="meta-item"><span class="meta-label">Verification Proof</span><span>🛡️ <code>${escapeHtml(proof.id)}</code> (${escapeHtml(proof.verdict.toUpperCase())})</span></div>`
           : ''
       }
     </div>

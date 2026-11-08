@@ -26,6 +26,7 @@ export interface CommandEvidence {
   stderr: string;
   provenance: 'agent_reported' | 'server_executed';
   args?: string[];
+  cwd?: string;
   durationMs?: number;
   executedAt?: string;
   timedOut?: boolean;
@@ -246,3 +247,64 @@ export const CaptureAstEvidenceSchema = z.object({
   compareWithGitHead: z.boolean().default(true),
 });
 export type CaptureAstEvidenceInput = z.infer<typeof CaptureAstEvidenceSchema>;
+
+export interface VerificationProof {
+  id: string;
+  bundleId: string;
+  bundleDigest: string;
+  verdict: VerificationStatus;
+  summary: string;
+  verifiedAt: string;
+  signer: {
+    algorithm: 'ed25519';
+    publicKeyPem: string;
+    keyFingerprint: string;
+  };
+  signature: string;
+  itemCount: number;
+  environment: {
+    platform: string;
+    nodeVersion: string;
+    arch: string;
+  };
+}
+
+export interface ReplayStepResult {
+  index: number;
+  evidenceId: string;
+  type: 'git' | 'file' | 'command' | 'ast';
+  description: string;
+  originalTimestamp: string;
+  status: 'passed' | 'failed' | 'diverged';
+  details: string;
+  reproducedExecution?: {
+    exitCode: number;
+    exitCodeMatches: boolean;
+    durationMs: number;
+  };
+}
+
+export interface ReplayResult {
+  bundleId: string;
+  replayedAt: string;
+  totalSteps: number;
+  passedSteps: number;
+  divergedSteps: number;
+  isReproducible: boolean;
+  steps: ReplayStepResult[];
+}
+
+export const ExportVerificationProofSchema = z.object({
+  bundleId: z.string().min(1, 'bundleId is required.'),
+  privateKeyPem: z.string().optional(),
+  workspacePath: z.string().optional(),
+});
+export type ExportVerificationProofInput = z.infer<typeof ExportVerificationProofSchema>;
+
+export const VerifyReplayProofSchema = z.object({
+  proofId: z.string().optional(),
+  proofJson: z.string().optional(),
+  bundleId: z.string().optional(),
+  workspacePath: z.string().optional(),
+});
+export type VerifyReplayProofInput = z.infer<typeof VerifyReplayProofSchema>;
