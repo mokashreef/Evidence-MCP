@@ -65,12 +65,14 @@ Evidence MCP establishes an explicit, honest trust boundary between what can and
 |---|---|---|---|
 | **File Snapshots** | Local Filesystem | Recomputed SHA-256 hash and byte size against on-disk files | `verified`, `stale`, or `failed` |
 | **Git State** | Git Repository | Re-queried Git CLI for branch, HEAD commit, and working tree cleanliness | `verified`, `stale`, or `failed` |
-| **Command Execution** | Agent Input | Recorded as self-reported execution logs (`provenance: 'agent_reported'`) | `unverifiable` (acknowledged log, not verified) |
+| **Server-Executed Commands** | Sandboxed Process Runner | Directly spawned by Evidence MCP (`provenance: 'server_executed'`) with real exit code, duration, and output | `verified` (exit 0) or `failed` (exit != 0) |
+| **Agent-Reported Commands** | Agent Client Input | Recorded as self-reported execution logs (`provenance: 'agent_reported'`) | `unverifiable` (acknowledged log, not verified) |
+| **Cryptographic Attestation** | Ed25519 Keypair | Asymmetric digital signature verified over canonical recursive JSON payload | `verified` (authentic) or `failed` (tampered) |
 
 ### Assertion Verification Rules
-- **Independently Backed:** An assertion supported by at least one verified file snapshot or Git state receives `verified` status.
-- **Agent-Reported Only:** An assertion relying *exclusively* on command evidence is marked as `unverifiable`. It cannot receive `verified` status because the server does not execute or sandbox the command in v0.1.
-- **Integrity Invalidation:** If any supporting file is altered (`stale`) or removed (`failed`), the assertion is marked accordingly.
+- **Independently Backed:** An assertion supported by at least one verified file snapshot, Git state, or server-executed command receives `verified` status.
+- **Agent-Reported Only:** An assertion relying *exclusively* on self-reported command evidence is marked as `unverifiable`. It cannot receive `verified` status because the server did not execute or observe the process.
+- **Integrity Invalidation:** If any supporting file is altered (`stale`) or removed (`failed`), or if a supporting server-executed command failed with non-zero exit code, the assertion is marked accordingly.
 
 ---
 
@@ -92,19 +94,20 @@ All data is stored locally in human-readable JSON files inside the workspace roo
 
 ---
 
-## Tools Catalog (v0.3.0)
+## Tools Catalog (v0.4.0)
 
-Evidence MCP provides eight focused tools through the Model Context Protocol:
+Evidence MCP provides nine focused tools through the Model Context Protocol:
 
 | Tool | Purpose | Key Inputs | Output |
 |---|---|---|---|
 | `create_evidence_bundle` | Initializes a new evidence bundle for a task | `task`, `workspacePath`, `metadata?` | `bundleId`, initial status (`in_progress`) |
 | `capture_git_evidence` | Safely records Git HEAD, branch, and status | `bundleId`, `workspacePath?` | `evidenceId`, `branch`, `headCommit`, `isClean` |
+| `execute_verified_command` | Spawns an approved command in sandboxed runner and captures verified execution | `bundleId`, `command`, `args?`, `cwd?`, `timeoutMs?` | `evidenceId`, `exitCode`, `durationMs`, `provenance: server_executed` |
 | `record_command_result` | Logs agent-reported command execution result (provenance: agent_reported) | `bundleId`, `command`, `exitCode`, `stdout`, `stderr` | `evidenceId`, `command`, `exitCode`, `provenance` |
 | `snapshot_files` | Computes SHA-256 and size for regular files inside workspace | `bundleId`, `paths` | `snapshots: [{ evidenceId, path, sha256, sizeBytes }]` |
 | `add_assertion` | Attaches a claim linked to supporting evidence | `bundleId`, `claim`, `evidenceIds` (min 1) | `assertionId`, `claim`, `evidenceIds` |
 | `sign_evidence_bundle` | Cryptographically signs the bundle using native Ed25519 | `bundleId`, `agentId?`, `privateKeyPath?` | `attestation: { agentId, algorithm, publicKey, signature }` |
-| `verify_evidence_bundle` | Validates file hashes, Git state, and Ed25519 signature against workspace | `bundleId`, `workspacePath?` | `status` (`verified` \| `stale` \| `failed` \| `unverifiable`), `items`, `reasons` |
+| `verify_evidence_bundle` | Validates file hashes, Git state, command results, and Ed25519 signature | `bundleId`, `workspacePath?` | `status` (`verified` \| `stale` \| `failed` \| `unverifiable`), `items`, `reasons` |
 | `export_evidence_report` | Generates a shareable Markdown, JSON, or interactive HTML report | `bundleId`, `format` (`markdown` \| `json` \| `html`) | Formatted report ready for PR or handoff |
 
 ---
@@ -126,7 +129,16 @@ node dist/cli.js verify bundle_9a41f0bc
 # Exits with 0 if verified; exits with 1 if stale, failed, or unverifiable
 ```
 
-### 3. Cryptographically Sign a Bundle
+### 3. Execute an Approved Command in Sandboxed Runner
+```bash
+# Run npm test directly in the workspace and record server_executed evidence:
+node dist/cli.js exec bundle_9a41f0bc npm test
+
+# Run a test command with custom working directory and timeout:
+node dist/cli.js exec bundle_9a41f0bc vitest run --cwd packages/core --timeout 45000
+```
+
+### 4. Cryptographically Sign a Bundle
 ```bash
 # Sign using workspace default Ed25519 key (auto-generated if absent):
 node dist/cli.js sign bundle_9a41f0bc
@@ -135,7 +147,7 @@ node dist/cli.js sign bundle_9a41f0bc
 node dist/cli.js sign bundle_9a41f0bc --key /path/to/agent_private.pem
 ```
 
-### 4. Export an Interactive HTML or Markdown Report
+### 5. Export an Interactive HTML or Markdown Report
 ```bash
 # Export standalone, offline-safe interactive HTML report:
 node dist/cli.js report bundle_9a41f0bc --format html --output ./reports/evidence.html
@@ -337,25 +349,31 @@ npm run build
 
 ---
 
-## Scope & Boundaries (v0.3.0)
+## Scope & Boundaries (v0.4.0)
 
-### Strictly In Scope for v0.3.0
+### Strictly In Scope for v0.4.0
+- Sandboxed process execution runner (`execute_verified_command` and `evidence-mcp exec`).
+- Strict security allowlist for developer tooling (`npm`, `npx`, `node`, `git`, `tsc`, `vitest`, `cargo`, `go`, etc.) and blocklist for dangerous interpreters/subshells and downloaders (`sh`, `bash`, `powershell`, `rm`, `curl`, `wget`).
+- Zero shell injection vulnerability (`shell: false` across all platforms).
+- Automatic environment variable sanitization (scrubbing secrets, API tokens, passwords, private keys).
+- Working directory confinement within workspace boundaries.
+- Resource bounds (timeouts up to 120s with process killing, 512KB stdout/stderr buffer caps).
+- Independent verification of server-executed commands in `verify_evidence_bundle` (exit 0 = verified, exit != 0 = failed).
 - Native Ed25519 asymmetric cryptographic attestation and bundle signing (`sign_evidence_bundle` and `evidence-mcp sign`).
 - Deterministic canonical payload serialization (`getCanonicalPayload`) for tamper resistance.
 - Cryptographic signature re-verification in `verify_evidence_bundle` and CLI `verify`.
 - Local file persistence under `.evidence-mcp/bundles/` and key pairs under `.evidence-mcp/keys/`.
-- Standalone CLI interface (`verify`, `list`, `report`, `sign`) with CI exit codes.
-- Interactive, responsive, offline-safe HTML report generation with attestation badges.
+- Standalone CLI interface (`verify`, `list`, `report`, `sign`, `exec`) with CI exit codes.
+- Interactive, responsive, offline-safe HTML report generation with provenance and attestation badges.
 - Safe Git state capture (read-only).
 - Recording command outputs provided by the agent (explicitly marked with `agent_reported` provenance).
 - Workspace-confined SHA-256 file snapshots (regular files only; symlinks rejected).
 - Mandatory evidence-linked assertions.
 - Live verification of file hashes, Git status, and cryptographic signatures.
-- Clear distinction between verified on-disk evidence, cryptographic signatures, and unverifiable agent logs.
 - Markdown, JSON, and HTML report exporting.
 
-### Out of Scope for v0.3.0
-- **Direct Arbitrary Shell Command Execution:** `record_command_result` records results provided by agents. The server does not execute arbitrary shell strings from client inputs.
+### Out of Scope for v0.4.0
+- **Direct Arbitrary Shell Command Execution:** Raw shell strings (e.g. `bash -c "..."`) without security boundaries are strictly rejected.
 - **Remote Publishing / Cloud Syncing:** Evidence bundles are local to the workspace. There is no auto-pushing to remote cloud APIs or external issue trackers.
 
 ---
@@ -363,7 +381,7 @@ npm run build
 ## Roadmap
 
 - **v0.3 (Completed):** Native Ed25519 cryptographic attestation, bundle signing, and tamper verification.
-- **v0.4:** Containerized sandbox execution runner for reproducible, server-verified command execution.
+- **v0.4 (Completed):** Sandboxed execution runner for reproducible, server-verified command execution.
 - **v0.5:** Multi-workspace support for cross-repository monorepo changes.
 - **v0.6:** Diff-level syntax tree (AST) evidence capturing.
 

@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-11-08
+
+### Added
+- **Sandboxed Command Runner & Independently Verified Execution:**
+  - Secure process execution runner (`src/runner.ts`) enabling the server to run tests, linters, and compilers directly rather than relying solely on self-reported agent claims.
+  - Strict security policy: Allowed developer tools (`npm`, `npx`, `node`, `git`, `tsc`, `vitest`, `jest`, `cargo`, `go`, etc.) and blocked raw shells (`sh`, `bash`, `powershell`, `cmd`), destroyers (`rm`, `del`), and network exfiltration tools (`curl`, `wget`).
+  - Direct execution with `shell: false` across all platforms to eliminate shell injection vulnerabilities.
+  - Automatic environment sanitization: Scrubs secret keys, API tokens, credentials, and passwords from child process environments.
+  - Workspace containment enforcement: Validates working directory boundaries against workspace root and rejects path escapes.
+  - Resource bounds: Enforces configurable timeouts (default 30s) with graceful and force termination, and 512KB buffer caps on stdout/stderr.
+  - New MCP tool `execute_verified_command` (Tool 9) with explicit `provenance: 'server_executed'`.
+  - New CLI command `evidence-mcp exec <bundleId> <command> [args...] [--timeout <ms>] [--cwd <dir>]`.
+  - Verification engine enhancement: `verify_evidence_bundle` verifies `server_executed` commands (exit 0 = verified, exit != 0 = failed), allowing assertions backed by server-executed test suites to achieve authentic `verified` status.
+  - Visual provenance badges and execution durations displayed in Markdown and HTML reports.
+  - Comprehensive test suite in `test/runner.test.ts` bringing total passing test suite to 106 tests across 9 test suites.
+
 ## [0.3.0] - 2026-11-07
 
 ### Added
