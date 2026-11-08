@@ -10,7 +10,7 @@ import { CommandEvidence } from './types.js';
 import path from 'node:path';
 import fs from 'node:fs';
 
-const VERSION = '0.4.0';
+const VERSION = '0.5.0';
 
 export function printHelp(): void {
   console.log(`
@@ -18,14 +18,16 @@ Evidence MCP (v${VERSION})
 Verifiable evidence collection and validation MCP server for AI coding agents.
 
 Usage:
-  evidence-mcp                                  Start the MCP server on stdio (default)
-  evidence-mcp list [workspacePath]             List all evidence bundles in workspace
-  evidence-mcp verify <bundleId> [options]      Verify an evidence bundle against disk & Git
-  evidence-mcp report <bundleId> [options]      Export an evidence report (markdown|json|html)
-  evidence-mcp sign <bundleId> [options]        Sign a bundle using an Ed25519 keypair
-  evidence-mcp exec <bundleId> <cmd> [args...]  Execute an approved command in sandboxed runner
-  evidence-mcp --help, -h                       Show this help message
-  evidence-mcp --version, -v                    Show version number
+  evidence-mcp                                      Start the MCP server on stdio (default)
+  evidence-mcp list [workspacePath]                 List all evidence bundles in workspace
+  evidence-mcp verify <bundleId> [options]          Verify an evidence bundle against disk & Git
+  evidence-mcp report <bundleId> [options]          Export an evidence report (markdown|json|html)
+  evidence-mcp sign <bundleId> [options]            Sign a bundle using an Ed25519 keypair
+  evidence-mcp exec <bundleId> <cmd> [args...]      Execute an approved command in sandboxed runner
+  evidence-mcp workspace add <bundleId> <name> <p>  Register a package or sub-workspace in bundle
+  evidence-mcp workspace list <bundleId>            List all workspaces registered in bundle
+  evidence-mcp --help, -h                           Show this help message
+  evidence-mcp --version, -v                        Show version number
 
 Options:
   --workspace, -w <path>   Workspace directory path (defaults to current working directory)
@@ -319,6 +321,61 @@ export async function runCli(args: string[]): Promise<number> {
     } catch (err: unknown) {
       console.error(`Execution error: ${(err as Error).message}`);
       return 1;
+    }
+  }
+
+  // 6. Command: workspace add|list
+  if (firstArg === 'workspace') {
+    const subAction = args[1];
+    if (subAction === 'add') {
+      const bundleId = args[2];
+      const wsName = args[3];
+      const wsPath = args[4];
+      if (!bundleId || !wsName || !wsPath) {
+        console.error(
+          'Error: bundleId, workspace name, and path are required.\nUsage: evidence-mcp workspace add <bundleId> <name> <path>'
+        );
+        return 1;
+      }
+      try {
+        const bundle = await loadBundle(bundleId);
+        const resolvedPath = path.resolve(bundle.workspacePath, wsPath);
+        if (!bundle.workspaces) {
+          bundle.workspaces = { root: bundle.workspacePath };
+        }
+        bundle.workspaces[wsName] = resolvedPath;
+        bundle.updatedAt = new Date().toISOString();
+        await saveBundle(bundle);
+        console.log(`Workspace "${wsName}" registered successfully: ${resolvedPath}`);
+        return 0;
+      } catch (err: unknown) {
+        console.error(`Workspace error: ${(err as Error).message}`);
+        return 1;
+      }
+    } else if (subAction === 'list') {
+      const bundleId = args[2];
+      if (!bundleId) {
+        console.error('Error: bundleId is required.\nUsage: evidence-mcp workspace list <bundleId>');
+        return 1;
+      }
+      try {
+        const bundle = await loadBundle(bundleId);
+        console.log(`\nRegistered Workspaces for Bundle: ${bundle.id}`);
+        console.log('================================================================================');
+        console.log(`root (default):  ${bundle.workspacePath}`);
+        if (bundle.workspaces) {
+          for (const [name, p] of Object.entries(bundle.workspaces)) {
+            if (name !== 'root') {
+              console.log(`${name.padEnd(16)} ${p}`);
+            }
+          }
+        }
+        console.log('================================================================================\n');
+        return 0;
+      } catch (err: unknown) {
+        console.error(`Workspace error: ${(err as Error).message}`);
+        return 1;
+      }
     }
   }
 

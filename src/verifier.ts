@@ -2,13 +2,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
   EvidenceBundle,
+  GitEvidence,
   VerificationItemResult,
   VerificationResult,
   VerificationStatus,
 } from './types.js';
 import { computeFileSha256AndSize } from './hasher.js';
-import { captureGitState, isGitRepository } from './git.js';
-import { saveBundle } from './storage.js';
+import { captureGitState, isGitRepository, GitInspectionResult } from './git.js';
+import { saveBundle, resolveWorkspaceForBundle } from './storage.js';
 import { assertSafeFilePath, SafeFilePathResult } from './security.js';
 import { verifyBundleAttestation } from './attestation.js';
 
@@ -33,69 +34,88 @@ export async function verifyEvidenceBundle(bundle: EvidenceBundle): Promise<Veri
 
   // 1. Verify Git Evidence (Independently verified against Git repository)
   if (bundle.evidence.git && bundle.evidence.git.length > 0) {
-    const isRepo = await isGitRepository(workspacePath);
-    if (!isRepo) {
-      for (const gitEv of bundle.evidence.git) {
+    const gitStateCache = new Map<string, GitInspectionResult>();
+
+    for (const gitEv of bundle.evidence.git) {
+      evidenceTypeMap.set(gitEv.id, 'git');
+      let targetWs: string;
+      try {
+        targetWs = resolveWorkspaceForBundle(bundle, gitEv.workspaceName);
+      } catch (err: unknown) {
         items.push({
           id: gitEv.id,
           type: 'git',
           status: 'failed',
-          details: `Workspace is not a valid Git repository: ${workspacePath}`,
+          details: `Workspace error: ${(err as Error).message}`,
         });
         evidenceStatusMap.set(gitEv.id, 'failed');
-        evidenceTypeMap.set(gitEv.id, 'git');
-        reasons.push(`Git verification failed: Workspace is not a Git repository.`);
+        reasons.push(`Git verification failed on (${gitEv.id}): ${(err as Error).message}`);
+        continue;
       }
-    } else {
-      let currentGitState;
-      try {
-        currentGitState = await captureGitState(workspacePath);
-      } catch (err: unknown) {
-        const errorMsg = (err as Error).message;
-        for (const gitEv of bundle.evidence.git) {
+
+      const isRepo = await isGitRepository(targetWs);
+      if (!isRepo) {
+        items.push({
+          id: gitEv.id,
+          type: 'git',
+          status: 'failed',
+          details: `Workspace "${gitEv.workspaceName || 'root'}" is not a valid Git repository: ${targetWs}`,
+        });
+        evidenceStatusMap.set(gitEv.id, 'failed');
+        reasons.push(`Git verification failed: Workspace "${gitEv.workspaceName || 'root'}" is not a Git repository.`);
+        continue;
+      }
+
+      let currentGitState = gitStateCache.get(targetWs);
+      if (!currentGitState) {
+        try {
+          currentGitState = await captureGitState(targetWs);
+          gitStateCache.set(targetWs, currentGitState);
+        } catch (err: unknown) {
+          const errorMsg = (err as Error).message;
           items.push({
             id: gitEv.id,
             type: 'git',
             status: 'failed',
-            details: `Failed to inspect Git status: ${errorMsg}`,
+            details: `Failed to inspect Git status in workspace "${gitEv.workspaceName || 'root'}": ${errorMsg}`,
           });
           evidenceStatusMap.set(gitEv.id, 'failed');
-          evidenceTypeMap.set(gitEv.id, 'git');
           reasons.push(`Git inspection failed: ${errorMsg}`);
+          continue;
         }
       }
 
-      if (currentGitState) {
-        for (const gitEv of bundle.evidence.git) {
-          evidenceTypeMap.set(gitEv.id, 'git');
-          const headMatches = gitEv.headCommit === currentGitState.headCommit;
-          const statusMatches = gitEv.statusShort === currentGitState.statusShort;
+      if (!currentGitState) {
+        continue;
+      }
 
-          if (!headMatches || !statusMatches) {
-            const diffReason = !headMatches
-              ? `HEAD commit moved from ${gitEv.headCommit.slice(0, 7)} to ${currentGitState.headCommit.slice(0, 7)}`
-              : `Working tree status changed (captured: "${gitEv.statusShort}", current: "${currentGitState.statusShort}")`;
+      const headMatches = gitEv.headCommit === currentGitState.headCommit;
+      const statusMatches = gitEv.statusShort === currentGitState.statusShort;
+      const wsTag = gitEv.workspaceName ? ` [workspace: ${gitEv.workspaceName}]` : '';
 
-            items.push({
-              id: gitEv.id,
-              type: 'git',
-              status: 'stale',
-              details: diffReason,
-              expected: `HEAD: ${gitEv.headCommit}, status: "${gitEv.statusShort}"`,
-              actual: `HEAD: ${currentGitState.headCommit}, status: "${currentGitState.statusShort}"`,
-            });
-            evidenceStatusMap.set(gitEv.id, 'stale');
-            reasons.push(`Git evidence (${gitEv.id}) is stale: ${diffReason}`);
-          } else {
-            items.push({
-              id: gitEv.id,
-              type: 'git',
-              status: 'verified',
-              details: `Git state strictly matches (HEAD: ${gitEv.headCommit.slice(0, 7)}, branch: ${gitEv.branch})`,
-            });
-            evidenceStatusMap.set(gitEv.id, 'verified');
-          }
-        }
+      if (!headMatches || !statusMatches) {
+        const diffReason = !headMatches
+          ? `HEAD commit moved from ${gitEv.headCommit.slice(0, 7)} to ${currentGitState.headCommit.slice(0, 7)}`
+          : `Working tree status changed (captured: "${gitEv.statusShort}", current: "${currentGitState.statusShort}")`;
+
+        items.push({
+          id: gitEv.id,
+          type: 'git',
+          status: 'stale',
+          details: `${diffReason}${wsTag}`,
+          expected: `HEAD: ${gitEv.headCommit}, status: "${gitEv.statusShort}"`,
+          actual: `HEAD: ${currentGitState.headCommit}, status: "${currentGitState.statusShort}"`,
+        });
+        evidenceStatusMap.set(gitEv.id, 'stale');
+        reasons.push(`Git evidence (${gitEv.id})${wsTag} is stale: ${diffReason}`);
+      } else {
+        items.push({
+          id: gitEv.id,
+          type: 'git',
+          status: 'verified',
+          details: `Git state strictly matches (HEAD: ${gitEv.headCommit.slice(0, 7)}, branch: ${gitEv.branch})${wsTag}`,
+        });
+        evidenceStatusMap.set(gitEv.id, 'verified');
       }
     }
   }
@@ -152,10 +172,26 @@ export async function verifyEvidenceBundle(bundle: EvidenceBundle): Promise<Veri
     for (const snapshot of bundle.evidence.fileSnapshots) {
       evidenceTypeMap.set(snapshot.id, 'file');
 
+      let targetWs: string;
+      try {
+        targetWs = resolveWorkspaceForBundle(bundle, snapshot.workspaceName);
+      } catch (err: unknown) {
+        items.push({
+          id: snapshot.id,
+          type: 'file',
+          status: 'failed',
+          target: snapshot.path,
+          details: `Workspace error: ${(err as Error).message}`,
+        });
+        evidenceStatusMap.set(snapshot.id, 'failed');
+        reasons.push(`File snapshot (${snapshot.id}) failed: ${(err as Error).message}`);
+        continue;
+      }
+
       // Security boundary validation before checking existence or reading/hashing target
       let safePath: SafeFilePathResult;
       try {
-        safePath = assertSafeFilePath(workspacePath, snapshot.path);
+        safePath = assertSafeFilePath(targetWs, snapshot.path);
       } catch (err: unknown) {
         const errorMsg = (err as Error).message;
         const isSecurityViolation =

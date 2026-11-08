@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import {
@@ -15,6 +16,7 @@ import {
   saveBundle,
   loadBundle,
   registerBundleWorkspace,
+  resolveWorkspaceForBundle,
 } from './storage.js';
 import { verifyEvidenceBundle } from './verifier.js';
 import { exportEvidenceReport } from './reporter.js';
@@ -24,28 +26,47 @@ import { executeSandboxedCommand } from './runner.js';
 export function createEvidenceServer(): McpServer {
   const server = new McpServer({
     name: 'evidence-mcp',
-    version: '0.4.0',
+    version: '0.5.0',
   });
 
   // 1. create_evidence_bundle
   server.tool(
     'create_evidence_bundle',
-    'Creates a new evidence bundle for a task and workspace with in_progress status.',
+    'Creates a new evidence bundle for a task and primary workspace (with optional additional monorepo packages) with in_progress status.',
     {
       task: z.string().min(1).describe('The task or objective being addressed by the agent.'),
-      workspacePath: z.string().min(1).describe('Path to the workspace root directory.'),
+      workspacePath: z.string().min(1).describe('Path to the primary workspace root directory.'),
       metadata: z.record(z.string(), z.unknown()).optional().describe('Optional key-value metadata.'),
+      additionalWorkspaces: z
+        .record(z.string(), z.string())
+        .optional()
+        .describe('Optional map of named additional workspaces/packages (e.g. { "frontend": "./packages/frontend" }).'),
     },
-    async ({ task, workspacePath, metadata }) => {
+    async ({ task, workspacePath, metadata, additionalWorkspaces }) => {
       try {
         const resolvedWorkspace = validateWorkspacePath(workspacePath);
         const bundleId = generateId('bundle');
         const now = new Date().toISOString();
 
+        const workspacesMap: Record<string, string> = {
+          root: resolvedWorkspace,
+        };
+
+        if (additionalWorkspaces) {
+          for (const [name, wsPath] of Object.entries(additionalWorkspaces)) {
+            if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
+              throw new Error(`Invalid workspace name "${name}": must be alphanumeric, hyphens, or underscores.`);
+            }
+            const resolvedSubWs = validateWorkspacePath(path.resolve(resolvedWorkspace, wsPath));
+            workspacesMap[name] = resolvedSubWs;
+          }
+        }
+
         const bundle: EvidenceBundle = {
           id: bundleId,
           task,
           workspacePath: resolvedWorkspace,
+          workspaces: workspacesMap,
           status: 'in_progress',
           createdAt: now,
           updatedAt: now,
@@ -72,6 +93,7 @@ export function createEvidenceServer(): McpServer {
                   task: bundle.task,
                   status: bundle.status,
                   workspacePath: bundle.workspacePath,
+                  workspaces: bundle.workspaces,
                   createdAt: bundle.createdAt,
                 },
                 null,
@@ -96,12 +118,14 @@ export function createEvidenceServer(): McpServer {
     'Safely inspects and captures Git state (status, branch, HEAD commit, diff check) without mutating the repo.',
     {
       bundleId: z.string().min(1).describe('The unique identifier of the evidence bundle.'),
+      workspaceName: z.string().optional().describe('Optional registered workspace/package name (defaults to primary root).'),
       workspacePath: z.string().optional().describe('Optional workspace path hint if running outside default cwd.'),
     },
-    async ({ bundleId, workspacePath }) => {
+    async ({ bundleId, workspaceName, workspacePath }) => {
       try {
         const bundle = await loadBundle(bundleId, workspacePath);
-        const gitState = await captureGitState(bundle.workspacePath);
+        const targetWs = resolveWorkspaceForBundle(bundle, workspaceName);
+        const gitState = await captureGitState(targetWs);
 
         const gitEvidence: GitEvidence = {
           id: generateId('git'),
@@ -112,6 +136,7 @@ export function createEvidenceServer(): McpServer {
           statusShort: gitState.statusShort,
           diffCheck: gitState.diffCheck,
           isClean: gitState.isClean,
+          ...(workspaceName ? { workspaceName } : {}),
         };
 
         if (!bundle.evidence.git) {
@@ -129,6 +154,7 @@ export function createEvidenceServer(): McpServer {
                   message: 'Git evidence captured successfully.',
                   bundleId: bundle.id,
                   evidenceId: gitEvidence.id,
+                  workspaceName: gitEvidence.workspaceName || 'root',
                   branch: gitEvidence.branch,
                   headCommit: gitEvidence.headCommit,
                   isClean: gitEvidence.isClean,
@@ -161,9 +187,10 @@ export function createEvidenceServer(): McpServer {
       exitCode: z.number().int().describe('The exit code returned by the command execution.'),
       stdout: z.string().describe('The standard output captured from the command.'),
       stderr: z.string().describe('The standard error captured from the command.'),
+      workspaceName: z.string().optional().describe('Optional registered workspace/package name (defaults to primary root).'),
       workspacePath: z.string().optional().describe('Optional workspace path hint.'),
     },
-    async ({ bundleId, command, exitCode, stdout, stderr, workspacePath }) => {
+    async ({ bundleId, command, exitCode, stdout, stderr, workspaceName, workspacePath }) => {
       try {
         const bundle = await loadBundle(bundleId, workspacePath);
 
@@ -176,6 +203,7 @@ export function createEvidenceServer(): McpServer {
           stdout,
           stderr,
           provenance: 'agent_reported',
+          ...(workspaceName ? { workspaceName } : {}),
         };
 
         if (!bundle.evidence.commands) {
@@ -194,6 +222,7 @@ export function createEvidenceServer(): McpServer {
                   bundleId: bundle.id,
                   evidenceId: cmdEvidence.id,
                   provenance: cmdEvidence.provenance,
+                  workspaceName: cmdEvidence.workspaceName || 'root',
                   command: cmdEvidence.command,
                   exitCode: cmdEvidence.exitCode,
                   recordedAt: cmdEvidence.recordedAt,
@@ -221,15 +250,17 @@ export function createEvidenceServer(): McpServer {
     {
       bundleId: z.string().min(1).describe('The unique identifier of the evidence bundle.'),
       paths: z.array(z.string().min(1)).min(1).describe('List of file paths relative to workspace root.'),
+      workspaceName: z.string().optional().describe('Optional registered workspace/package name (defaults to primary root).'),
       workspacePath: z.string().optional().describe('Optional workspace path hint.'),
     },
-    async ({ bundleId, paths, workspacePath }) => {
+    async ({ bundleId, paths, workspaceName, workspacePath }) => {
       try {
         const bundle = await loadBundle(bundleId, workspacePath);
+        const targetWs = resolveWorkspaceForBundle(bundle, workspaceName);
         const snapshots: FileSnapshotEvidence[] = [];
 
         for (const filePath of paths) {
-          const safePath = assertSafeFilePath(bundle.workspacePath, filePath);
+          const safePath = assertSafeFilePath(targetWs, filePath);
           const hashResult = await computeFileSha256AndSize(safePath.absolutePath);
 
           const snapshot: FileSnapshotEvidence = {
@@ -240,6 +271,7 @@ export function createEvidenceServer(): McpServer {
             absolutePath: safePath.absolutePath,
             sha256: hashResult.sha256,
             sizeBytes: hashResult.sizeBytes,
+            ...(workspaceName ? { workspaceName } : {}),
           };
 
           snapshots.push(snapshot);
@@ -261,6 +293,7 @@ export function createEvidenceServer(): McpServer {
                   bundleId: bundle.id,
                   snapshots: snapshots.map((s) => ({
                     evidenceId: s.id,
+                    workspaceName: s.workspaceName || 'root',
                     path: s.path,
                     sha256: s.sha256,
                     sizeBytes: s.sizeBytes,
@@ -485,12 +518,14 @@ export function createEvidenceServer(): McpServer {
       cwd: z.string().optional().describe('Optional working directory relative to workspace root.'),
       timeoutMs: z.number().int().min(500).max(120000).optional().describe('Execution timeout in milliseconds (default 30000).'),
       env: z.record(z.string(), z.string()).optional().describe('Optional custom environment variables (sensitive tokens will be rejected).'),
+      workspaceName: z.string().optional().describe('Optional registered workspace/package name (defaults to primary root).'),
       workspacePath: z.string().optional().describe('Optional workspace path hint.'),
     },
-    async ({ bundleId, command, args, cwd, timeoutMs, env, workspacePath }) => {
+    async ({ bundleId, command, args, cwd, timeoutMs, env, workspaceName, workspacePath }) => {
       try {
         const bundle = await loadBundle(bundleId, workspacePath);
-        const resolvedWorkspace = validateWorkspacePath(workspacePath || bundle.workspacePath);
+        const targetWs = resolveWorkspaceForBundle(bundle, workspaceName);
+        const resolvedWorkspace = validateWorkspacePath(targetWs);
 
         const executionResult = await executeSandboxedCommand({
           command,
@@ -514,6 +549,7 @@ export function createEvidenceServer(): McpServer {
           executedAt: executionResult.executedAt,
           timedOut: executionResult.timedOut,
           provenance: 'server_executed',
+          ...(workspaceName ? { workspaceName } : {}),
         };
 
         if (!bundle.evidence.commands) {
@@ -532,6 +568,7 @@ export function createEvidenceServer(): McpServer {
                   message: 'Command executed and verified evidence recorded successfully.',
                   bundleId: bundle.id,
                   evidenceId: commandEvidence.id,
+                  workspaceName: commandEvidence.workspaceName || 'root',
                   command: commandEvidence.command,
                   args: commandEvidence.args,
                   exitCode: commandEvidence.exitCode,
@@ -552,6 +589,62 @@ export function createEvidenceServer(): McpServer {
         return {
           isError: true,
           content: [{ type: 'text', text: `Failed to execute verified command: ${message}` }],
+        };
+      }
+    }
+  );
+
+  // 10. register_workspace
+  server.tool(
+    'register_workspace',
+    'Registers an additional named workspace or package within a monorepo or multi-repo evidence bundle.',
+    {
+      bundleId: z.string().min(1).describe('The unique identifier of the evidence bundle.'),
+      name: z
+        .string()
+        .min(1)
+        .regex(/^[a-zA-Z0-9_-]+$/, 'Workspace name must only contain alphanumeric characters, hyphens, and underscores.')
+        .describe('Unique name for the workspace (e.g. "frontend", "backend", "shared").'),
+      path: z.string().min(1).describe('Path to the workspace root directory (absolute or relative to bundle root).'),
+      workspacePath: z.string().optional().describe('Optional workspace path hint to locate the bundle.'),
+    },
+    async ({ bundleId, name, path: rawPath, workspacePath }) => {
+      try {
+        const bundle = await loadBundle(bundleId, workspacePath);
+        const baseDir = bundle.workspacePath;
+        const resolvedPath = validateWorkspacePath(path.resolve(baseDir, rawPath));
+
+        if (!bundle.workspaces) {
+          bundle.workspaces = { root: bundle.workspacePath };
+        }
+
+        bundle.workspaces[name] = resolvedPath;
+        bundle.updatedAt = new Date().toISOString();
+        await saveBundle(bundle);
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  message: `Workspace "${name}" registered successfully in bundle.`,
+                  bundleId: bundle.id,
+                  workspaceName: name,
+                  workspacePath: resolvedPath,
+                  allWorkspaces: bundle.workspaces,
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `Failed to register workspace: ${message}` }],
         };
       }
     }

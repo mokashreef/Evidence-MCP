@@ -13,6 +13,7 @@ export interface GitEvidence {
   statusShort: string;
   diffCheck: string;
   isClean: boolean;
+  workspaceName?: string;
 }
 
 export interface CommandEvidence {
@@ -28,6 +29,7 @@ export interface CommandEvidence {
   durationMs?: number;
   executedAt?: string;
   timedOut?: boolean;
+  workspaceName?: string;
 }
 
 export interface FileSnapshotEvidence {
@@ -38,6 +40,7 @@ export interface FileSnapshotEvidence {
   absolutePath: string;
   sha256: string;
   sizeBytes: number;
+  workspaceName?: string;
 }
 
 export interface Assertion {
@@ -59,6 +62,7 @@ export interface EvidenceBundle {
   id: string;
   task: string;
   workspacePath: string;
+  workspaces?: Record<string, string>;
   status: BundleStatus;
   createdAt: string;
   updatedAt: string;
@@ -99,12 +103,25 @@ export const CreateEvidenceBundleSchema = z.object({
   task: z.string().min(1, 'Task description cannot be empty.'),
   workspacePath: z.string().min(1, 'Workspace path cannot be empty.'),
   metadata: z.record(z.string(), z.unknown()).optional(),
+  additionalWorkspaces: z.record(z.string(), z.string()).optional(),
 });
 export type CreateEvidenceBundleInput = z.infer<typeof CreateEvidenceBundleSchema>;
+
+export const RegisterWorkspaceSchema = z.object({
+  bundleId: z.string().min(1, 'bundleId is required.'),
+  name: z
+    .string()
+    .min(1, 'Workspace name cannot be empty.')
+    .regex(/^[a-zA-Z0-9_-]+$/, 'Workspace name must only contain alphanumeric characters, hyphens, and underscores.'),
+  path: z.string().min(1, 'Workspace path cannot be empty.'),
+  workspacePath: z.string().optional(),
+});
+export type RegisterWorkspaceInput = z.infer<typeof RegisterWorkspaceSchema>;
 
 export const CaptureGitEvidenceSchema = z.object({
   bundleId: z.string().min(1, 'bundleId is required.'),
   workspacePath: z.string().optional(),
+  workspaceName: z.string().optional(),
 });
 export type CaptureGitEvidenceInput = z.infer<typeof CaptureGitEvidenceSchema>;
 
@@ -115,6 +132,7 @@ export const RecordCommandResultSchema = z.object({
   stdout: z.string(),
   stderr: z.string(),
   workspacePath: z.string().optional(),
+  workspaceName: z.string().optional(),
 });
 export type RecordCommandResultInput = z.infer<typeof RecordCommandResultSchema>;
 
@@ -122,6 +140,7 @@ export const SnapshotFilesSchema = z.object({
   bundleId: z.string().min(1, 'bundleId is required.'),
   paths: z.array(z.string().min(1)).min(1, 'At least one file path must be provided.'),
   workspacePath: z.string().optional(),
+  workspaceName: z.string().optional(),
 });
 export type SnapshotFilesInput = z.infer<typeof SnapshotFilesSchema>;
 
@@ -161,5 +180,6 @@ export const ExecuteVerifiedCommandSchema = z.object({
   timeoutMs: z.number().int().min(500).max(120000).optional(),
   env: z.record(z.string(), z.string()).optional(),
   workspacePath: z.string().optional(),
+  workspaceName: z.string().optional(),
 });
 export type ExecuteVerifiedCommandInput = z.infer<typeof ExecuteVerifiedCommandSchema>;

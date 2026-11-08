@@ -64,6 +64,18 @@ export function exportEvidenceReport(
   }
   lines.push('');
 
+  // Registered Workspaces (if multi-workspace)
+  if (bundle.workspaces && Object.keys(bundle.workspaces).length > 1) {
+    lines.push('## Registered Workspaces');
+    lines.push('');
+    lines.push('| Workspace Name | Absolute Path |');
+    lines.push('|---|---|');
+    for (const [name, wsPath] of Object.entries(bundle.workspaces)) {
+      lines.push(`| \`${name}\` | \`${wsPath}\` |`);
+    }
+    lines.push('');
+  }
+
   // Assertions
   lines.push('## Assertions');
   lines.push('');
@@ -85,6 +97,9 @@ export function exportEvidenceReport(
     lines.push('');
     for (const git of bundle.evidence.git) {
       lines.push(`### Evidence ID: \`${git.id}\``);
+      if (git.workspaceName) {
+        lines.push(`- **Workspace:** \`${git.workspaceName}\``);
+      }
       lines.push(`- **Captured At:** \`${git.capturedAt}\``);
       lines.push(`- **Branch:** \`${git.branch}\``);
       lines.push(`- **HEAD Commit:** \`${git.headCommit}\``);
@@ -103,12 +118,23 @@ export function exportEvidenceReport(
   if (bundle.evidence.fileSnapshots && bundle.evidence.fileSnapshots.length > 0) {
     lines.push('## File Snapshots (Independently Verified)');
     lines.push('');
-    lines.push('| Evidence ID | File Path | SHA-256 | Size (Bytes) | Captured At |');
-    lines.push('|---|---|---|---|---|');
-    for (const file of bundle.evidence.fileSnapshots) {
-      lines.push(
-        `| \`${file.id}\` | \`${file.path}\` | \`${file.sha256.slice(0, 16)}...\` | ${file.sizeBytes} | \`${file.capturedAt}\` |`
-      );
+    const hasMultipleWs = bundle.evidence.fileSnapshots.some((f) => f.workspaceName);
+    if (hasMultipleWs) {
+      lines.push('| Evidence ID | Workspace | File Path | SHA-256 | Size (Bytes) | Captured At |');
+      lines.push('|---|---|---|---|---|---|');
+      for (const file of bundle.evidence.fileSnapshots) {
+        lines.push(
+          `| \`${file.id}\` | \`${file.workspaceName || 'root'}\` | \`${file.path}\` | \`${file.sha256.slice(0, 16)}...\` | ${file.sizeBytes} | \`${file.capturedAt}\` |`
+        );
+      }
+    } else {
+      lines.push('| Evidence ID | File Path | SHA-256 | Size (Bytes) | Captured At |');
+      lines.push('|---|---|---|---|---|');
+      for (const file of bundle.evidence.fileSnapshots) {
+        lines.push(
+          `| \`${file.id}\` | \`${file.path}\` | \`${file.sha256.slice(0, 16)}...\` | ${file.sizeBytes} | \`${file.capturedAt}\` |`
+        );
+      }
     }
     lines.push('');
   }
@@ -127,6 +153,9 @@ export function exportEvidenceReport(
       const isServerExecuted = cmd.provenance === 'server_executed';
       const cmdDisplay = cmd.args && cmd.args.length > 0 ? `${cmd.command} ${cmd.args.join(' ')}` : cmd.command;
       lines.push(`### \`${cmdDisplay}\` (ID: \`${cmd.id}\`)`);
+      if (cmd.workspaceName) {
+        lines.push(`- **Workspace:** \`${cmd.workspaceName}\``);
+      }
       lines.push(`- **Provenance:** \`${cmd.provenance || 'agent_reported'}\`${isServerExecuted ? ' (Server-Executed)' : ' (Agent-Reported)'}`);
       lines.push(`- **Exit Code:** ${exitBadge}`);
       if (cmd.durationMs !== undefined) {
@@ -507,6 +536,25 @@ function generateHtmlReport(bundle: EvidenceBundle, verification?: VerificationR
     </div>
 
     ${verificationHtml}
+
+    ${
+      bundle.workspaces && Object.keys(bundle.workspaces).length > 1
+        ? `<h2>Registered Workspaces</h2>
+    <div class="card">
+      <table>
+        <thead><tr><th>Workspace Name</th><th>Absolute Path</th></tr></thead>
+        <tbody>
+          ${Object.entries(bundle.workspaces)
+            .map(
+              ([name, wsPath]) =>
+                `<tr><td><span class="tag">${escapeHtml(name)}</span></td><td><code>${escapeHtml(wsPath)}</code></td></tr>`
+            )
+            .join('')}
+        </tbody>
+      </table>
+    </div>`
+        : ''
+    }
 
     <h2>Assertions</h2>
     <div class="card">${assertionsHtml}</div>

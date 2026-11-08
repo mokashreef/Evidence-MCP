@@ -67,6 +67,34 @@ export async function saveBundle(bundle: EvidenceBundle): Promise<void> {
   await fs.promises.rename(tempPath, targetPath);
 
   registerBundleWorkspace(bundle.id, workspacePath);
+  if (bundle.workspaces) {
+    for (const wsPath of Object.values(bundle.workspaces)) {
+      registerBundleWorkspace(bundle.id, wsPath);
+    }
+  }
+}
+
+/**
+ * Resolves the absolute directory path for a named workspace registered in the bundle.
+ * Defaults to bundle.workspacePath if workspaceName is omitted, 'root', or 'default'.
+ */
+export function resolveWorkspaceForBundle(
+  bundle: EvidenceBundle,
+  workspaceName?: string
+): string {
+  if (!workspaceName || workspaceName === 'root' || workspaceName === 'default') {
+    return path.resolve(bundle.workspacePath);
+  }
+
+  const customPath = bundle.workspaces?.[workspaceName];
+  if (!customPath) {
+    const available = ['root', ...Object.keys(bundle.workspaces || {})].join(', ');
+    throw new Error(
+      `Workspace "${workspaceName}" is not registered in bundle "${bundle.id}". Available workspaces: [${available}].`
+    );
+  }
+
+  return path.resolve(customPath);
 }
 
 /**
