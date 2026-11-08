@@ -100,17 +100,50 @@ export async function verifyEvidenceBundle(bundle: EvidenceBundle): Promise<Veri
     }
   }
 
-  // 2. Command Evidence (Agent-reported execution logs: not independently verified)
+  // 2. Command Evidence (Differentiate agent-reported logs vs server-executed records)
   if (bundle.evidence.commands && bundle.evidence.commands.length > 0) {
     for (const cmdEv of bundle.evidence.commands) {
-      evidenceStatusMap.set(cmdEv.id, 'unverifiable');
       evidenceTypeMap.set(cmdEv.id, 'command');
-      items.push({
-        id: cmdEv.id,
-        type: 'command',
-        status: 'unverifiable',
-        details: `Agent-reported execution record (${cmdEv.command}, exit ${cmdEv.exitCode}); not independently verified.`,
-      });
+
+      if (cmdEv.provenance === 'server_executed') {
+        const fullCmdStr = cmdEv.args && cmdEv.args.length > 0
+          ? `${cmdEv.command} ${cmdEv.args.join(' ')}`
+          : cmdEv.command;
+
+        if (cmdEv.exitCode === 0 && !cmdEv.timedOut) {
+          evidenceStatusMap.set(cmdEv.id, 'verified');
+          items.push({
+            id: cmdEv.id,
+            type: 'command',
+            status: 'verified',
+            details: `Server-executed verified command succeeded (exit 0, ${cmdEv.durationMs ?? 0}ms): "${fullCmdStr}"`,
+          });
+        } else {
+          evidenceStatusMap.set(cmdEv.id, 'failed');
+          const failReason = cmdEv.timedOut
+            ? `Process timed out after ${cmdEv.durationMs ?? 0}ms`
+            : `Exited with code ${cmdEv.exitCode}`;
+
+          items.push({
+            id: cmdEv.id,
+            type: 'command',
+            status: 'failed',
+            details: `Server-executed command failed (${failReason}, ${cmdEv.durationMs ?? 0}ms): "${fullCmdStr}"`,
+            expected: 'exit code 0',
+            actual: `exit code ${cmdEv.exitCode}`,
+          });
+          reasons.push(`Server-executed command (${cmdEv.id}) failed: "${fullCmdStr}" (${failReason})`);
+        }
+      } else {
+        // Agent-reported execution record
+        evidenceStatusMap.set(cmdEv.id, 'unverifiable');
+        items.push({
+          id: cmdEv.id,
+          type: 'command',
+          status: 'unverifiable',
+          details: `Agent-reported execution record (${cmdEv.command}, exit ${cmdEv.exitCode}); not independently verified.`,
+        });
+      }
     }
   }
 
@@ -235,7 +268,7 @@ export async function verifyEvidenceBundle(bundle: EvidenceBundle): Promise<Veri
         } else if (status === 'stale') {
           staleEvidence.push(evId);
         } else if (status === 'verified') {
-          if (type === 'git' || type === 'file') {
+          if (type === 'git' || type === 'file' || type === 'command') {
             hasVerifiableEvidence = true;
           }
         }

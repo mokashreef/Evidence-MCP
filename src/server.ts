@@ -19,11 +19,12 @@ import {
 import { verifyEvidenceBundle } from './verifier.js';
 import { exportEvidenceReport } from './reporter.js';
 import { signEvidenceBundle } from './attestation.js';
+import { executeSandboxedCommand } from './runner.js';
 
 export function createEvidenceServer(): McpServer {
   const server = new McpServer({
     name: 'evidence-mcp',
-    version: '0.3.0',
+    version: '0.4.0',
   });
 
   // 1. create_evidence_bundle
@@ -468,6 +469,89 @@ export function createEvidenceServer(): McpServer {
         return {
           isError: true,
           content: [{ type: 'text', text: `Failed to sign evidence bundle: ${message}` }],
+        };
+      }
+    }
+  );
+
+  // 9. execute_verified_command
+  server.tool(
+    'execute_verified_command',
+    'Executes an approved dev/test command in a sandboxed, isolated environment within the workspace and records independently verified execution evidence (provenance: server_executed).',
+    {
+      bundleId: z.string().min(1).describe('The unique identifier of the evidence bundle.'),
+      command: z.string().min(1).describe('The executable command to run (e.g. "npm", "git", "node", "vitest").'),
+      args: z.array(z.string()).default([]).describe('Arguments array passed directly to the command.'),
+      cwd: z.string().optional().describe('Optional working directory relative to workspace root.'),
+      timeoutMs: z.number().int().min(500).max(120000).optional().describe('Execution timeout in milliseconds (default 30000).'),
+      env: z.record(z.string(), z.string()).optional().describe('Optional custom environment variables (sensitive tokens will be rejected).'),
+      workspacePath: z.string().optional().describe('Optional workspace path hint.'),
+    },
+    async ({ bundleId, command, args, cwd, timeoutMs, env, workspacePath }) => {
+      try {
+        const bundle = await loadBundle(bundleId, workspacePath);
+        const resolvedWorkspace = validateWorkspacePath(workspacePath || bundle.workspacePath);
+
+        const executionResult = await executeSandboxedCommand({
+          command,
+          args,
+          cwd,
+          timeoutMs,
+          env,
+          workspacePath: resolvedWorkspace,
+        });
+
+        const commandEvidence: CommandEvidence = {
+          id: generateId('cmd'),
+          type: 'command',
+          recordedAt: executionResult.executedAt,
+          command: executionResult.command,
+          args: executionResult.args,
+          exitCode: executionResult.exitCode,
+          stdout: executionResult.stdout,
+          stderr: executionResult.stderr,
+          durationMs: executionResult.durationMs,
+          executedAt: executionResult.executedAt,
+          timedOut: executionResult.timedOut,
+          provenance: 'server_executed',
+        };
+
+        if (!bundle.evidence.commands) {
+          bundle.evidence.commands = [];
+        }
+        bundle.evidence.commands.push(commandEvidence);
+        bundle.updatedAt = new Date().toISOString();
+        await saveBundle(bundle);
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  message: 'Command executed and verified evidence recorded successfully.',
+                  bundleId: bundle.id,
+                  evidenceId: commandEvidence.id,
+                  command: commandEvidence.command,
+                  args: commandEvidence.args,
+                  exitCode: commandEvidence.exitCode,
+                  durationMs: commandEvidence.durationMs,
+                  timedOut: commandEvidence.timedOut,
+                  provenance: commandEvidence.provenance,
+                  stdoutPreview: commandEvidence.stdout.slice(0, 500),
+                  stderrPreview: commandEvidence.stderr.slice(0, 500),
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `Failed to execute verified command: ${message}` }],
         };
       }
     }

@@ -115,19 +115,24 @@ export function exportEvidenceReport(
 
   // Command Records
   if (bundle.evidence.commands && bundle.evidence.commands.length > 0) {
-    lines.push('## Recorded Commands (Agent-Reported)');
+    lines.push('## Command Executions & Records');
     lines.push('');
     lines.push('> [!NOTE]');
     lines.push(
-      '> Command results are self-reported by the agent and are not independently executed or verified by Evidence MCP.'
+      '> Commands with `server_executed` provenance were directly executed by Evidence MCP in a sandboxed runner. Commands with `agent_reported` provenance are self-reported agent logs.'
     );
     lines.push('');
     for (const cmd of bundle.evidence.commands) {
       const exitBadge = cmd.exitCode === 0 ? '✅ 0' : `❌ ${cmd.exitCode}`;
-      lines.push(`### \`${cmd.command}\` (ID: \`${cmd.id}\`)`);
-      lines.push(`- **Provenance:** \`${cmd.provenance || 'agent_reported'}\``);
+      const isServerExecuted = cmd.provenance === 'server_executed';
+      const cmdDisplay = cmd.args && cmd.args.length > 0 ? `${cmd.command} ${cmd.args.join(' ')}` : cmd.command;
+      lines.push(`### \`${cmdDisplay}\` (ID: \`${cmd.id}\`)`);
+      lines.push(`- **Provenance:** \`${cmd.provenance || 'agent_reported'}\`${isServerExecuted ? ' (Server-Executed)' : ' (Agent-Reported)'}`);
       lines.push(`- **Exit Code:** ${exitBadge}`);
-      lines.push(`- **Recorded At:** \`${cmd.recordedAt}\``);
+      if (cmd.durationMs !== undefined) {
+        lines.push(`- **Duration:** \`${cmd.durationMs}ms\``);
+      }
+      lines.push(`- **Executed At:** \`${cmd.executedAt || cmd.recordedAt}\``);
 
       if (cmd.stdout && cmd.stdout.trim().length > 0) {
         lines.push('');
@@ -275,17 +280,26 @@ function generateHtmlReport(bundle: EvidenceBundle, verification?: VerificationR
   const commandsHtml =
     bundle.evidence.commands && bundle.evidence.commands.length > 0
       ? bundle.evidence.commands
-          .map(
-            (c) => `<div class="card subcard">
+          .map((c) => {
+            const isServer = c.provenance === 'server_executed';
+            const cmdText = c.args && c.args.length > 0 ? `${c.command} ${c.args.join(' ')}` : c.command;
+            const provBadge = isServer
+              ? '<span class="badge badge-success">server_executed (verified)</span>'
+              : '<span class="badge badge-info">agent_reported (unverified)</span>';
+            const durationText = c.durationMs !== undefined ? ` &bull; Duration: ${c.durationMs}ms` : '';
+            return `<div class="card subcard">
               <div class="cmd-header">
-                <code>${escapeHtml(c.command)}</code>
-                <span class="badge ${c.exitCode === 0 ? 'badge-success' : 'badge-danger'}">Exit: ${c.exitCode}</span>
+                <code>${escapeHtml(cmdText)}</code>
+                <div>
+                  ${provBadge}
+                  <span class="badge ${c.exitCode === 0 ? 'badge-success' : 'badge-danger'}">Exit: ${c.exitCode}</span>
+                </div>
               </div>
-              <p class="meta">Provenance: <code>${escapeHtml(c.provenance || 'agent_reported')}</code> (Unverified) &bull; Recorded: ${escapeHtml(c.recordedAt)}</p>
+              <p class="meta">Provenance: <code>${escapeHtml(c.provenance || 'agent_reported')}</code>${durationText} &bull; Recorded: ${escapeHtml(c.executedAt || c.recordedAt)}</p>
               ${c.stdout ? `<details><summary>Standard Output (stdout)</summary><pre><code>${escapeHtml(c.stdout)}</code></pre></details>` : ''}
               ${c.stderr ? `<details><summary>Standard Error (stderr)</summary><pre><code>${escapeHtml(c.stderr)}</code></pre></details>` : ''}
-            </div>`
-          )
+            </div>`;
+          })
           .join('')
       : '<p class="empty-state">No command executions recorded.</p>';
 
@@ -503,7 +517,7 @@ function generateHtmlReport(bundle: EvidenceBundle, verification?: VerificationR
     <h2>File Snapshots</h2>
     <div class="card">${filesHtml}</div>
 
-    <h2>Recorded Commands (Agent-Reported)</h2>
+    <h2>Command Executions & Records</h2>
     ${commandsHtml}
 
     <footer>

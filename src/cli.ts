@@ -1,14 +1,16 @@
 #!/usr/bin/env node
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { createEvidenceServer } from './server.js';
-import { listBundles, loadBundle, saveBundle } from './storage.js';
+import { listBundles, loadBundle, saveBundle, generateId } from './storage.js';
 import { verifyEvidenceBundle } from './verifier.js';
 import { exportEvidenceReport } from './reporter.js';
 import { signEvidenceBundle } from './attestation.js';
+import { executeSandboxedCommand } from './runner.js';
+import { CommandEvidence } from './types.js';
 import path from 'node:path';
 import fs from 'node:fs';
 
-const VERSION = '0.3.0';
+const VERSION = '0.4.0';
 
 export function printHelp(): void {
   console.log(`
@@ -16,19 +18,22 @@ Evidence MCP (v${VERSION})
 Verifiable evidence collection and validation MCP server for AI coding agents.
 
 Usage:
-  evidence-mcp                              Start the MCP server on stdio (default)
-  evidence-mcp list [workspacePath]         List all evidence bundles in workspace
-  evidence-mcp verify <bundleId> [options]  Verify an evidence bundle against disk & Git
-  evidence-mcp report <bundleId> [options]  Export an evidence report (markdown|json|html)
-  evidence-mcp sign <bundleId> [options]    Sign a bundle using an Ed25519 keypair
-  evidence-mcp --help, -h                   Show this help message
-  evidence-mcp --version, -v                Show version number
+  evidence-mcp                                  Start the MCP server on stdio (default)
+  evidence-mcp list [workspacePath]             List all evidence bundles in workspace
+  evidence-mcp verify <bundleId> [options]      Verify an evidence bundle against disk & Git
+  evidence-mcp report <bundleId> [options]      Export an evidence report (markdown|json|html)
+  evidence-mcp sign <bundleId> [options]        Sign a bundle using an Ed25519 keypair
+  evidence-mcp exec <bundleId> <cmd> [args...]  Execute an approved command in sandboxed runner
+  evidence-mcp --help, -h                       Show this help message
+  evidence-mcp --version, -v                    Show version number
 
 Options:
   --workspace, -w <path>   Workspace directory path (defaults to current working directory)
   --format, -f <format>    Report format: markdown, json, or html (default: markdown)
   --output, -o <file>      Write exported report directly to file
   --key, -k <file>         Private key file for Ed25519 signing (auto-generates if omitted)
+  --timeout <ms>           Execution timeout in milliseconds (default: 30000)
+  --cwd <path>             Working directory relative to workspace root
 `);
 }
 
@@ -234,6 +239,85 @@ export async function runCli(args: string[]): Promise<number> {
       return 0;
     } catch (err: unknown) {
       console.error(`Signing error: ${(err as Error).message}`);
+      return 1;
+    }
+  }
+
+  // 5. Command: exec <bundleId> <cmd> [args...]
+  if (firstArg === 'exec') {
+    const bundleId = args[1];
+    const command = args[2];
+    if (!bundleId || bundleId.startsWith('-') || !command || command.startsWith('-')) {
+      console.error(
+        'Error: bundleId and command are required for exec command.\nUsage: evidence-mcp exec <bundleId> <command> [args...] [--timeout <ms>] [--cwd <path>]'
+      );
+      return 1;
+    }
+
+    const commandArgs: string[] = [];
+    let workspace: string | undefined;
+    let cwd: string | undefined;
+    let timeoutMs: number | undefined;
+
+    for (let i = 3; i < args.length; i++) {
+      if ((args[i] === '--workspace' || args[i] === '-w') && args[i + 1]) {
+        workspace = args[++i];
+      } else if (args[i] === '--cwd' && args[i + 1]) {
+        cwd = args[++i];
+      } else if (args[i] === '--timeout' && args[i + 1]) {
+        timeoutMs = parseInt(args[++i], 10);
+      } else {
+        commandArgs.push(args[i]);
+      }
+    }
+
+    try {
+      const bundle = await loadBundle(bundleId, workspace);
+      const effectiveWorkspace = workspace || bundle.workspacePath;
+
+      const result = await executeSandboxedCommand({
+        command,
+        args: commandArgs,
+        cwd,
+        timeoutMs,
+        workspacePath: effectiveWorkspace,
+      });
+
+      const commandEvidence: CommandEvidence = {
+        id: generateId('cmd'),
+        type: 'command',
+        recordedAt: result.executedAt,
+        command: result.command,
+        args: result.args,
+        exitCode: result.exitCode,
+        stdout: result.stdout,
+        stderr: result.stderr,
+        durationMs: result.durationMs,
+        executedAt: result.executedAt,
+        timedOut: result.timedOut,
+        provenance: 'server_executed',
+      };
+
+      if (!bundle.evidence.commands) {
+        bundle.evidence.commands = [];
+      }
+      bundle.evidence.commands.push(commandEvidence);
+      bundle.updatedAt = new Date().toISOString();
+      await saveBundle(bundle);
+
+      if (result.stdout) {
+        process.stdout.write(result.stdout);
+        if (!result.stdout.endsWith('\n')) process.stdout.write('\n');
+      }
+      if (result.stderr) {
+        process.stderr.write(result.stderr);
+        if (!result.stderr.endsWith('\n')) process.stderr.write('\n');
+      }
+
+      console.error(`\n[Evidence MCP] Command executed and recorded: ${commandEvidence.id} (Exit ${result.exitCode}, ${result.durationMs}ms)`);
+      return result.exitCode === 0 ? 0 : 1;
+    } catch (err: unknown) {
+      console.error(`Execution error: ${(err as Error).message}`);
       return 1;
     }
   }

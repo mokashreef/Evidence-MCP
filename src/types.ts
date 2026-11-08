@@ -23,7 +23,11 @@ export interface CommandEvidence {
   exitCode: number;
   stdout: string;
   stderr: string;
-  provenance: 'agent_reported';
+  provenance: 'agent_reported' | 'server_executed';
+  args?: string[];
+  durationMs?: number;
+  executedAt?: string;
+  timedOut?: boolean;
 }
 
 export interface FileSnapshotEvidence {
@@ -148,3 +152,14 @@ export const SignEvidenceBundleSchema = z.object({
   workspacePath: z.string().optional(),
 });
 export type SignEvidenceBundleInput = z.infer<typeof SignEvidenceBundleSchema>;
+
+export const ExecuteVerifiedCommandSchema = z.object({
+  bundleId: z.string().min(1, 'bundleId is required.'),
+  command: z.string().min(1, 'Command cannot be empty.'),
+  args: z.array(z.string()).default([]),
+  cwd: z.string().optional(),
+  timeoutMs: z.number().int().min(500).max(120000).optional(),
+  env: z.record(z.string(), z.string()).optional(),
+  workspacePath: z.string().optional(),
+});
+export type ExecuteVerifiedCommandInput = z.infer<typeof ExecuteVerifiedCommandSchema>;
