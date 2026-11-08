@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-11-08
+
+### Added
+- **Cryptographic Verification Proofs & Replay Engine:**
+  - Portable, signed verification proofs (`src/proof.ts`) that certify the verified verdict of an evidence bundle with an asymmetric Ed25519 digital signature.
+  - New MCP tool `export_verification_proof` (Tool 12): verifies an evidence bundle and exports a signed verification proof file under `.evidence-mcp/proofs/` containing verdict, bundle digest, item count, and cryptographic signature.
+  - New MCP tool `verify_replay_proof` (Tool 13): verifies the authenticity of exported proof files both online against the workspace bundle and offline via public key and fingerprint validation.
+  - Deterministic Evidence Replay Engine (`replayEvidenceBundle`): executes chronological sequence validation of Git states, file hashes, command records, and AST symbols with optional sandboxed re-execution of server-executed commands (`--re-execute`) to verify deterministic reproducibility.
+  - New CLI commands:
+    - `evidence-mcp proof create <bundleId> [--output <file>] [--key <file>]`
+    - `evidence-mcp proof verify <file|id> [--bundle <bundleId>]`
+    - `evidence-mcp replay <bundleId> [--re-execute]`
+  - Reporting enhancements: Markdown and responsive HTML reports now display active verification proofs and signatures in the bundle metadata header.
+  - Comprehensive test suite in `test/proof.test.ts` bringing total passing test suite to 132 tests across 12 test suites.
+
 ## [0.6.0] - 2026-11-08
 
 ### Added

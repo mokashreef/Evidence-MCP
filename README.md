@@ -85,19 +85,24 @@ All data is stored locally in human-readable JSON files inside the workspace roo
 <workspace>/
 ├── .evidence-mcp/
 │   ├── .gitignore             # Automatically ignores .evidence-mcp/ from Git
-│   └── bundles/
-│       └── bundle_<id>.json   # Individual evidence bundle file
+│   ├── bundles/
+│   │   └── bundle_<id>.json   # Individual evidence bundle file
+│   ├── keys/
+│   │   ├── agent.key          # Local Ed25519 private key
+│   │   └── agent.pub          # Local Ed25519 public key
+│   └── proofs/
+│       └── proof_<id>.json    # Cryptographically signed portable verification proofs
 ```
 
 - **Zero Remote Dependencies:** Operates entirely offline with standard Node.js runtime.
-- **Atomic Writes:** Bundle updates are written to temporary files and renamed atomically to prevent corrupted files.
+- **Atomic Writes:** Bundle and proof updates are written to temporary files and renamed atomically to prevent corrupted files.
 - **Clean Git Integration:** The `.evidence-mcp/` folder creates its own internal `.gitignore` so bundle persistence never pollutes repository status.
 
 ---
 
-## Tools Catalog (v0.6.0)
+## Tools Catalog (v0.7.0)
 
-Evidence MCP provides eleven focused tools through the Model Context Protocol:
+Evidence MCP provides thirteen focused tools through the Model Context Protocol:
 
 | Tool | Purpose | Key Inputs | Output |
 |---|---|---|---|
@@ -112,6 +117,8 @@ Evidence MCP provides eleven focused tools through the Model Context Protocol:
 | `sign_evidence_bundle` | Cryptographically signs the bundle using native Ed25519 | `bundleId`, `agentId?`, `privateKeyPath?` | `attestation: { agentId, algorithm, publicKey, signature }` |
 | `verify_evidence_bundle` | Validates file hashes, Git state, AST symbols, command results, and signatures | `bundleId`, `workspacePath?` | `status` (`verified` \| `stale` \| `failed` \| `unverifiable`), `items`, `reasons` |
 | `export_evidence_report` | Generates a shareable Markdown, JSON, or interactive HTML report | `bundleId`, `format` (`markdown` \| `json` \| `html`) | Formatted report ready for PR or handoff |
+| `export_verification_proof` | Issues an Ed25519 cryptographically signed portable verification proof | `bundleId`, `privateKeyPem?`, `workspacePath?` | `proofId`, `verdict`, `bundleDigest`, `signature` |
+| `verify_replay_proof` | Verifies cryptographic signature and digest consistency of an exported proof | `proofId?`, `proofJson?`, `bundleId?` | `valid` (boolean), `verdict`, `bundleDigestMatches` |
 
 ---
 
@@ -175,6 +182,24 @@ node dist/cli.js ast bundle_9a41f0bc src/index.ts src/utils.ts
 
 # Capture AST evidence for a specific monorepo package without Git HEAD diff:
 node dist/cli.js ast bundle_9a41f0bc src/types.ts --package backend --no-diff
+```
+
+### 8. Export Cryptographically Signed Verification Proofs
+```bash
+# Verify a bundle and issue an Ed25519-signed verification proof:
+node dist/cli.js proof create bundle_9a41f0bc --output ./proofs/release-v1.proof.json
+
+# Verify an exported proof file (validates signature and checks bundle digest):
+node dist/cli.js proof verify ./proofs/release-v1.proof.json
+```
+
+### 9. Sequential Evidence Replay & Reproducibility Check
+```bash
+# Replay all evidence chronologically against live workspace state:
+node dist/cli.js replay bundle_9a41f0bc
+
+# Re-execute server-executed commands during replay to confirm output reproducibility:
+node dist/cli.js replay bundle_9a41f0bc --re-execute
 ```
 
 ### CI/CD Pipeline Integration (GitHub Actions)
@@ -370,9 +395,12 @@ npm run build
 
 ---
 
-## Scope & Boundaries (v0.6.0)
+## Scope & Boundaries (v0.7.0)
 
-### Strictly In Scope for v0.6.0
+### Strictly In Scope for v0.7.0
+- Cryptographic verification proofs (`export_verification_proof` tool and `evidence-mcp proof create` CLI).
+- Proof verification and digest validation (`verify_replay_proof` tool and `evidence-mcp proof verify` CLI).
+- Sequential evidence replay and reproducibility auditing (`replayEvidenceBundle` and `evidence-mcp replay`).
 - AST structural symbol extraction and semantic diff computation (`capture_ast_evidence` tool and `evidence-mcp ast` CLI).
 - Breaking change detection flagging removed exported symbols, visibility downgrades, and added required parameters.
 - Independent verification of AST code structures in `verify_evidence_bundle` against live on-disk symbols.
@@ -390,14 +418,14 @@ npm run build
 - Native Ed25519 asymmetric cryptographic attestation and bundle signing (`sign_evidence_bundle` and `evidence-mcp sign`).
 - Deterministic canonical payload serialization (`getCanonicalPayload`) for tamper resistance.
 - Cryptographic signature re-verification in `verify_evidence_bundle` and CLI `verify`.
-- Local file persistence under `.evidence-mcp/bundles/` and key pairs under `.evidence-mcp/keys/`.
-- Standalone CLI interface (`verify`, `list`, `report`, `sign`, `exec`, `workspace`, `ast`) with CI exit codes.
+- Local file persistence under `.evidence-mcp/bundles/`, `.evidence-mcp/proofs/`, and key pairs under `.evidence-mcp/keys/`.
+- Standalone CLI interface (`verify`, `list`, `report`, `sign`, `exec`, `workspace`, `ast`, `proof`, `replay`) with CI exit codes.
 - Interactive, responsive, offline-safe HTML report generation with multi-workspace tables, AST symbol catalogs, and badges.
 - Mandatory evidence-linked assertions.
 - Live verification of file hashes, Git status, AST symbols, and cryptographic signatures.
 - Markdown, JSON, and HTML report exporting.
 
-### Out of Scope for v0.6.0
+### Out of Scope for v0.7.0
 - **Direct Arbitrary Shell Command Execution:** Raw shell strings (e.g. `bash -c "..."`) without security boundaries are strictly rejected.
 - **Remote Publishing / Cloud Syncing:** Evidence bundles are local to the workspace. There is no auto-pushing to remote cloud APIs or external issue trackers.
 
@@ -409,7 +437,8 @@ npm run build
 - **v0.4 (Completed):** Sandboxed execution runner for reproducible, server-verified command execution.
 - **v0.5 (Completed):** Multi-workspace support for cross-repository monorepo changes.
 - **v0.6 (Completed):** Diff-level syntax tree (AST) evidence capturing with breaking change detection.
-- **v0.7:** Signed reproducible evidence replay & bundle verification proofs.
+- **v0.7 (Completed):** Signed reproducible evidence replay & bundle verification proofs.
+- **v0.8:** Multi-agent cross-verification consensus protocol.
 
 ---
 
