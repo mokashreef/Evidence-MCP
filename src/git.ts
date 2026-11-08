@@ -101,3 +101,22 @@ export async function captureGitState(workspacePath: string): Promise<GitInspect
     isClean,
   };
 }
+
+/**
+ * Safely fetches file content at HEAD commit. Returns null if file is newly added or not tracked in Git.
+ */
+export async function getFileContentAtGitHead(
+  workspacePath: string,
+  relativePath: string
+): Promise<string | null> {
+  const isRepo = await isGitRepository(workspacePath);
+  if (!isRepo) return null;
+
+  try {
+    const gitPath = relativePath.split(path.sep).join('/');
+    const content = await runSafeGitCommand(workspacePath, ['show', `HEAD:${gitPath}`]);
+    return content;
+  } catch {
+    return null;
+  }
+}

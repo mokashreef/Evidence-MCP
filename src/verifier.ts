@@ -12,6 +12,7 @@ import { captureGitState, isGitRepository, GitInspectionResult } from './git.js'
 import { saveBundle, resolveWorkspaceForBundle } from './storage.js';
 import { assertSafeFilePath, SafeFilePathResult } from './security.js';
 import { verifyBundleAttestation } from './attestation.js';
+import { parseSourceSymbols } from './ast.js';
 
 /**
  * Re-evaluates all captured evidence inside a bundle against the workspace's current live state.
@@ -30,7 +31,7 @@ export async function verifyEvidenceBundle(bundle: EvidenceBundle): Promise<Veri
 
   // Map to track verification status and evidence type of individual evidence IDs
   const evidenceStatusMap = new Map<string, 'verified' | 'stale' | 'failed' | 'unverifiable'>();
-  const evidenceTypeMap = new Map<string, 'git' | 'command' | 'file'>();
+  const evidenceTypeMap = new Map<string, 'git' | 'command' | 'file' | 'ast'>();
 
   // 1. Verify Git Evidence (Independently verified against Git repository)
   if (bundle.evidence.git && bundle.evidence.git.length > 0) {
@@ -266,7 +267,124 @@ export async function verifyEvidenceBundle(bundle: EvidenceBundle): Promise<Veri
     }
   }
 
-  // 4. Verify Assertions & Supporting Evidence Linkages
+  // 4. Verify AST Semantic Evidence (Independently verified against live file symbols)
+  if (bundle.evidence.ast && bundle.evidence.ast.length > 0) {
+    for (const astEv of bundle.evidence.ast) {
+      evidenceTypeMap.set(astEv.id, 'ast');
+
+      let targetWs: string;
+      try {
+        targetWs = resolveWorkspaceForBundle(bundle, astEv.workspaceName);
+      } catch (err: unknown) {
+        items.push({
+          id: astEv.id,
+          type: 'ast',
+          status: 'failed',
+          target: astEv.filePath,
+          details: `Workspace error: ${(err as Error).message}`,
+        });
+        evidenceStatusMap.set(astEv.id, 'failed');
+        reasons.push(`AST evidence (${astEv.id}) failed: ${(err as Error).message}`);
+        continue;
+      }
+
+      let safePath: SafeFilePathResult;
+      try {
+        safePath = assertSafeFilePath(targetWs, astEv.filePath);
+      } catch (err: unknown) {
+        const errorMsg = (err as Error).message;
+        items.push({
+          id: astEv.id,
+          type: 'ast',
+          status: 'failed',
+          target: astEv.filePath,
+          details: `Security boundary violation: ${errorMsg}`,
+        });
+        evidenceStatusMap.set(astEv.id, 'failed');
+        reasons.push(`Security violation on AST target "${astEv.filePath}": ${errorMsg}`);
+        continue;
+      }
+
+      if (!fs.existsSync(safePath.absolutePath)) {
+        items.push({
+          id: astEv.id,
+          type: 'ast',
+          status: 'failed',
+          target: astEv.filePath,
+          details: `AST target file was deleted or moved: ${astEv.filePath}`,
+        });
+        evidenceStatusMap.set(astEv.id, 'failed');
+        reasons.push(`AST file missing: "${astEv.filePath}" no longer exists.`);
+        continue;
+      }
+
+      try {
+        const content = await fs.promises.readFile(safePath.absolutePath, 'utf8');
+        const liveSymbols = parseSourceSymbols(content, astEv.filePath);
+
+        // Check if captured symbols still exist and match signatures
+        const liveMap = new Map<string, string>();
+        for (const s of liveSymbols) {
+          liveMap.set(`${s.kind}:${s.name}`, s.signature || '');
+        }
+
+        let symbolMismatch = false;
+        const missingSymbols: string[] = [];
+
+        for (const recordedSym of astEv.symbols) {
+          const key = `${recordedSym.kind}:${recordedSym.name}`;
+          const liveSig = liveMap.get(key);
+          if (liveSig === undefined) {
+            symbolMismatch = true;
+            missingSymbols.push(`${recordedSym.kind} ${recordedSym.name}`);
+          } else if (recordedSym.signature && liveSig !== recordedSym.signature) {
+            symbolMismatch = true;
+          }
+        }
+
+        const wsTag = astEv.workspaceName ? ` [workspace: ${astEv.workspaceName}]` : '';
+
+        if (symbolMismatch) {
+          const reasonText =
+            missingSymbols.length > 0
+              ? `Symbols removed or renamed: [${missingSymbols.join(', ')}]`
+              : `Symbol signatures modified on disk since snapshot`;
+
+          items.push({
+            id: astEv.id,
+            type: 'ast',
+            status: 'stale',
+            target: astEv.filePath,
+            details: `AST semantic mismatch: ${reasonText}${wsTag}`,
+          });
+          evidenceStatusMap.set(astEv.id, 'stale');
+          reasons.push(`AST evidence (${astEv.id}) stale on "${astEv.filePath}": ${reasonText}`);
+        } else {
+          items.push({
+            id: astEv.id,
+            type: 'ast',
+            status: 'verified',
+            target: astEv.filePath,
+            details: `AST symbol integrity verified (${astEv.symbolsCount} symbols intact)${wsTag}`,
+          });
+          evidenceStatusMap.set(astEv.id, 'verified');
+        }
+      } catch (err: unknown) {
+        const errorMsg = (err as Error).message;
+        items.push({
+          id: astEv.id,
+          type: 'ast',
+          status: 'failed',
+          target: astEv.filePath,
+          details: `Failed to inspect AST: ${errorMsg}`,
+        });
+        evidenceStatusMap.set(astEv.id, 'failed');
+        reasons.push(`AST read error on "${astEv.filePath}": ${errorMsg}`);
+      }
+    }
+  }
+
+  // 5. Verify Assertions & Supporting Evidence Linkages
   if (!bundle.assertions || bundle.assertions.length === 0) {
     reasons.push('Bundle has no assertions. At least one assertion with supporting evidence is required.');
     items.push({
@@ -304,7 +422,7 @@ export async function verifyEvidenceBundle(bundle: EvidenceBundle): Promise<Veri
         } else if (status === 'stale') {
           staleEvidence.push(evId);
         } else if (status === 'verified') {
-          if (type === 'git' || type === 'file' || type === 'command') {
+          if (type === 'git' || type === 'file' || type === 'command' || type === 'ast') {
             hasVerifiableEvidence = true;
           }
         }

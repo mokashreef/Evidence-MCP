@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 export type BundleStatus = 'in_progress' | 'completed' | 'verified' | 'stale' | 'failed' | 'unverifiable';
-export type EvidenceType = 'git' | 'command' | 'file_snapshot';
+export type EvidenceType = 'git' | 'command' | 'file_snapshot' | 'ast';
 export type VerificationStatus = 'verified' | 'stale' | 'failed' | 'unverifiable';
 
 export interface GitEvidence {
@@ -43,6 +43,59 @@ export interface FileSnapshotEvidence {
   workspaceName?: string;
 }
 
+export type AstSymbolKind =
+  | 'function'
+  | 'class'
+  | 'interface'
+  | 'type'
+  | 'enum'
+  | 'variable'
+  | 'method';
+
+export interface AstParameter {
+  name: string;
+  type?: string;
+  optional?: boolean;
+  defaultValue?: string;
+}
+
+export interface AstSymbol {
+  name: string;
+  kind: AstSymbolKind;
+  isExported: boolean;
+  isAsync?: boolean;
+  signature?: string;
+  parameters?: AstParameter[];
+  returnType?: string;
+  startLine: number;
+  endLine: number;
+}
+
+export interface AstSemanticDiff {
+  filePath: string;
+  hasChanges: boolean;
+  isBreakingChange: boolean;
+  addedSymbols: AstSymbol[];
+  removedSymbols: AstSymbol[];
+  modifiedSymbols: {
+    symbol: AstSymbol;
+    previous: AstSymbol;
+    changes: string[];
+  }[];
+}
+
+export interface AstEvidence {
+  id: string;
+  type: 'ast';
+  capturedAt: string;
+  filePath: string;
+  workspaceName?: string;
+  language: string;
+  symbolsCount: number;
+  symbols: AstSymbol[];
+  diff?: AstSemanticDiff;
+}
+
 export interface Assertion {
   id: string;
   claim: string;
@@ -72,13 +125,14 @@ export interface EvidenceBundle {
     git?: GitEvidence[];
     commands?: CommandEvidence[];
     fileSnapshots?: FileSnapshotEvidence[];
+    ast?: AstEvidence[];
   };
   assertions: Assertion[];
 }
 
 export interface VerificationItemResult {
   id: string;
-  type: 'git' | 'file' | 'command' | 'assertion' | 'attestation';
+  type: 'git' | 'file' | 'command' | 'assertion' | 'attestation' | 'ast';
   status: 'verified' | 'stale' | 'failed' | 'unverifiable' | 'recorded';
   details: string;
   target?: string;
@@ -183,3 +237,12 @@ export const ExecuteVerifiedCommandSchema = z.object({
   workspaceName: z.string().optional(),
 });
 export type ExecuteVerifiedCommandInput = z.infer<typeof ExecuteVerifiedCommandSchema>;
+
+export const CaptureAstEvidenceSchema = z.object({
+  bundleId: z.string().min(1, 'bundleId is required.'),
+  files: z.array(z.string().min(1)).min(1, 'At least one file path must be provided.'),
+  workspaceName: z.string().optional(),
+  workspacePath: z.string().optional(),
+  compareWithGitHead: z.boolean().default(true),
+});
+export type CaptureAstEvidenceInput = z.infer<typeof CaptureAstEvidenceSchema>;

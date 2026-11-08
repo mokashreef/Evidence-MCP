@@ -1,16 +1,17 @@
 #!/usr/bin/env node
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { createEvidenceServer } from './server.js';
-import { listBundles, loadBundle, saveBundle, generateId } from './storage.js';
+import { listBundles, loadBundle, saveBundle, generateId, resolveWorkspaceForBundle } from './storage.js';
 import { verifyEvidenceBundle } from './verifier.js';
 import { exportEvidenceReport } from './reporter.js';
 import { signEvidenceBundle } from './attestation.js';
 import { executeSandboxedCommand } from './runner.js';
+import { captureFileAstEvidence } from './ast.js';
 import { CommandEvidence } from './types.js';
 import path from 'node:path';
 import fs from 'node:fs';
 
-const VERSION = '0.5.0';
+const VERSION = '0.6.0';
 
 export function printHelp(): void {
   console.log(`
@@ -26,6 +27,7 @@ Usage:
   evidence-mcp exec <bundleId> <cmd> [args...]      Execute an approved command in sandboxed runner
   evidence-mcp workspace add <bundleId> <name> <p>  Register a package or sub-workspace in bundle
   evidence-mcp workspace list <bundleId>            List all workspaces registered in bundle
+  evidence-mcp ast <bundleId> <files...> [options]  Capture AST symbols and semantic diff for files
   evidence-mcp --help, -h                           Show this help message
   evidence-mcp --version, -v                        Show version number
 
@@ -36,6 +38,7 @@ Options:
   --key, -k <file>         Private key file for Ed25519 signing (auto-generates if omitted)
   --timeout <ms>           Execution timeout in milliseconds (default: 30000)
   --cwd <path>             Working directory relative to workspace root
+  --no-diff                Do not compute semantic diff against Git HEAD
 `);
 }
 
@@ -376,6 +379,95 @@ export async function runCli(args: string[]): Promise<number> {
         console.error(`Workspace error: ${(err as Error).message}`);
         return 1;
       }
+    }
+  }
+
+  // 7. Command: ast <bundleId> <files...> [options]
+  if (firstArg === 'ast') {
+    const bundleId = args[1];
+    if (!bundleId) {
+      console.error('Error: bundleId is required.\nUsage: evidence-mcp ast <bundleId> <files...> [options]');
+      return 1;
+    }
+
+    const rawFiles: string[] = [];
+    let workspacePath: string | undefined;
+    let workspaceName: string | undefined;
+    let compareWithGitHead = true;
+
+    for (let i = 2; i < args.length; i++) {
+      if ((args[i] === '--workspace' || args[i] === '-w') && args[i + 1]) {
+        workspacePath = args[++i];
+      } else if ((args[i] === '--package' || args[i] === '--pkg') && args[i + 1]) {
+        workspaceName = args[++i];
+      } else if (args[i] === '--no-diff') {
+        compareWithGitHead = false;
+      } else if (!args[i].startsWith('-')) {
+        rawFiles.push(args[i]);
+      }
+    }
+
+    if (rawFiles.length === 0) {
+      console.error('Error: At least one file path must be provided.');
+      return 1;
+    }
+
+    try {
+      const bundle = await loadBundle(bundleId, workspacePath);
+      const targetWs = resolveWorkspaceForBundle(bundle, workspaceName);
+
+      if (!bundle.evidence.ast) {
+        bundle.evidence.ast = [];
+      }
+
+      console.log(`Analyzing AST & semantic diff for ${rawFiles.length} file(s)...`);
+
+      for (const f of rawFiles) {
+        const astEv = await captureFileAstEvidence({
+          filePath: f,
+          workspacePath: targetWs,
+          workspaceName,
+          compareWithGitHead,
+        });
+
+        bundle.evidence.ast.push(astEv);
+
+        const wsLabel = astEv.workspaceName ? ` [${astEv.workspaceName}]` : '';
+        console.log(`\n  File: ${astEv.filePath}${wsLabel} (${astEv.language}, ${astEv.symbolsCount} symbols)`);
+        if (astEv.diff) {
+          if (astEv.diff.hasChanges) {
+            const changeBadge = astEv.diff.isBreakingChange ? ' [BREAKING CHANGE]' : '';
+            console.log(`  Semantic Changes Detected${changeBadge}:`);
+            if (astEv.diff.addedSymbols.length > 0) {
+              console.log(
+                `    + Added: ${astEv.diff.addedSymbols.map((s) => `${s.kind} ${s.name}`).join(', ')}`
+              );
+            }
+            if (astEv.diff.removedSymbols.length > 0) {
+              console.log(
+                `    - Removed: ${astEv.diff.removedSymbols.map((s) => `${s.kind} ${s.name}`).join(', ')}`
+              );
+            }
+            if (astEv.diff.modifiedSymbols.length > 0) {
+              console.log(
+                `    ~ Modified: ${astEv.diff.modifiedSymbols
+                  .map((m) => `${m.symbol.kind} ${m.symbol.name} (${m.changes.join('; ')})`)
+                  .join(', ')}`
+              );
+            }
+          } else {
+            console.log('  No semantic changes compared to Git HEAD.');
+          }
+        }
+      }
+
+      bundle.updatedAt = new Date().toISOString();
+      await saveBundle(bundle);
+      console.log(`\nAST evidence successfully captured and saved to bundle: ${bundle.id}`);
+      return 0;
+    } catch (err: unknown) {
+      console.error(`AST analysis error: ${(err as Error).message}`);
+      return 1;
     }
   }
 

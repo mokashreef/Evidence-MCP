@@ -186,6 +186,67 @@ export function exportEvidenceReport(
     }
   }
 
+  // AST Semantic Evidence
+  if (bundle.evidence.ast && bundle.evidence.ast.length > 0) {
+    lines.push('## AST & Semantic Diff Evidence (Independently Verified)');
+    lines.push('');
+    for (const ast of bundle.evidence.ast) {
+      lines.push(`### \`${ast.filePath}\` (ID: \`${ast.id}\`)`);
+      if (ast.workspaceName) {
+        lines.push(`- **Workspace:** \`${ast.workspaceName}\``);
+      }
+      lines.push(`- **Language:** \`${ast.language}\``);
+      lines.push(`- **Symbols Analyzed:** ${ast.symbolsCount}`);
+      lines.push(`- **Captured At:** \`${ast.capturedAt}\``);
+
+      if (ast.diff) {
+        if (!ast.diff.hasChanges) {
+          lines.push('- **Semantic Status:** 🟢 Identical to Git HEAD (No semantic changes)');
+        } else {
+          const breakingBadge = ast.diff.isBreakingChange ? ' 🔴 **BREAKING CHANGE DETECTED**' : '';
+          lines.push(`- **Semantic Status:** 🟡 Semantic Diff Detected${breakingBadge}`);
+          if (ast.diff.addedSymbols.length > 0) {
+            lines.push(
+              `  - **Added Symbols (${ast.diff.addedSymbols.length}):** ${ast.diff.addedSymbols
+                .map((s) => `\`${s.kind} ${s.name}\``)
+                .join(', ')}`
+            );
+          }
+          if (ast.diff.removedSymbols.length > 0) {
+            lines.push(
+              `  - **Removed Symbols (${ast.diff.removedSymbols.length}):** ${ast.diff.removedSymbols
+                .map((s) => `\`${s.kind} ${s.name}\``)
+                .join(', ')}`
+            );
+          }
+          if (ast.diff.modifiedSymbols.length > 0) {
+            lines.push(`  - **Modified Symbols (${ast.diff.modifiedSymbols.length}):**`);
+            for (const mod of ast.diff.modifiedSymbols) {
+              lines.push(
+                `    - \`${mod.symbol.kind} ${mod.symbol.name}\`: ${mod.changes.join('; ')}`
+              );
+            }
+          }
+        }
+      }
+
+      if (ast.symbols.length > 0) {
+        lines.push('');
+        lines.push('<details><summary>Exported & Local Symbols Catalog</summary>');
+        lines.push('');
+        lines.push('| Kind | Name | Exported | Signature |');
+        lines.push('|---|---|---|---|');
+        for (const s of ast.symbols) {
+          lines.push(
+            `| \`${s.kind}\` | \`${s.name}\` | ${s.isExported ? '✅ Yes' : 'No'} | \`${(s.signature || '').replace(/\|/g, '\\|')}\` |`
+          );
+        }
+        lines.push('</details>');
+      }
+      lines.push('');
+    }
+  }
+
   // Verification Summary if provided
   if (verification) {
     lines.push('## Verification Details');
@@ -331,6 +392,85 @@ function generateHtmlReport(bundle: EvidenceBundle, verification?: VerificationR
           })
           .join('')
       : '<p class="empty-state">No command executions recorded.</p>';
+
+  const astHtml =
+    bundle.evidence.ast && bundle.evidence.ast.length > 0
+      ? bundle.evidence.ast
+          .map((a) => {
+            const breakingBadge = a.diff?.isBreakingChange
+              ? '<span class="badge badge-danger">BREAKING CHANGE</span>'
+              : '';
+            const statusBadge = !a.diff?.hasChanges
+              ? '<span class="badge badge-success">Clean (No Diff)</span>'
+              : `<span class="badge badge-warning">Modified (${(a.diff.addedSymbols.length + a.diff.removedSymbols.length + a.diff.modifiedSymbols.length)} diffs)</span>`;
+            const wsTag = a.workspaceName ? `<span class="tag">${escapeHtml(a.workspaceName)}</span>` : '';
+
+            let diffDetails = '';
+            if (a.diff && a.diff.hasChanges) {
+              const added =
+                a.diff.addedSymbols.length > 0
+                  ? `<div style="margin: 4px 0;"><strong style="color:#2da44e;">+ Added:</strong> ${a.diff.addedSymbols
+                      .map((s) => `<code>${escapeHtml(s.kind)} ${escapeHtml(s.name)}</code>`)
+                      .join(', ')}</div>`
+                  : '';
+              const removed =
+                a.diff.removedSymbols.length > 0
+                  ? `<div style="margin: 4px 0;"><strong style="color:#cf222e;">- Removed:</strong> ${a.diff.removedSymbols
+                      .map((s) => `<code>${escapeHtml(s.kind)} ${escapeHtml(s.name)}</code>`)
+                      .join(', ')}</div>`
+                  : '';
+              const modified =
+                a.diff.modifiedSymbols.length > 0
+                  ? `<div style="margin: 4px 0;"><strong style="color:#bf8700;">~ Modified:</strong> ${a.diff.modifiedSymbols
+                      .map(
+                        (m) =>
+                          `<code>${escapeHtml(m.symbol.kind)} ${escapeHtml(m.symbol.name)}</code> (${escapeHtml(m.changes.join('; '))})`
+                      )
+                      .join(', ')}</div>`
+                  : '';
+              diffDetails = `<div style="margin-top: 8px; font-size: 13px;">${added}${removed}${modified}</div>`;
+            }
+
+            return `<div class="card subcard">
+              <div class="cmd-header">
+                <div>
+                  <code>${escapeHtml(a.filePath)}</code> ${wsTag}
+                  <span class="tag">${escapeHtml(a.language)}</span>
+                </div>
+                <div>
+                  ${statusBadge}
+                  ${breakingBadge}
+                </div>
+              </div>
+              <p class="meta">Evidence ID: <code>${escapeHtml(a.id)}</code> &bull; Symbols: ${a.symbolsCount} &bull; Captured: ${escapeHtml(a.capturedAt)}</p>
+              ${diffDetails}
+              ${
+                a.symbols.length > 0
+                  ? `<details><summary>Exported & Local Symbols (${a.symbols.length})</summary>
+                     <table>
+                       <thead><tr><th>Kind</th><th>Name</th><th>Exported</th><th>Signature</th></tr></thead>
+                       <tbody>
+                         ${a.symbols
+                           .map(
+                             (s) =>
+                               `<tr><td><code>${escapeHtml(s.kind)}</code></td><td><strong>${escapeHtml(
+                                 s.name
+                               )}</strong></td><td>${
+                                 s.isExported
+                                   ? '<span class="badge badge-success">Yes</span>'
+                                   : '<span class="badge">No</span>'
+                               }</td><td><code>${escapeHtml(s.signature || '')}</code></td></tr>`
+                           )
+                           .join('')}
+                       </tbody>
+                     </table>
+                   </details>`
+                  : ''
+              }
+            </div>`;
+          })
+          .join('')
+      : '<p class="empty-state">No AST semantic evidence recorded.</p>';
 
   const verificationHtml = verification
     ? `<div class="card verification-card">
@@ -564,6 +704,9 @@ function generateHtmlReport(bundle: EvidenceBundle, verification?: VerificationR
 
     <h2>File Snapshots</h2>
     <div class="card">${filesHtml}</div>
+
+    <h2>AST & Semantic Diff Evidence</h2>
+    ${astHtml}
 
     <h2>Command Executions & Records</h2>
     ${commandsHtml}

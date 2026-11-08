@@ -7,6 +7,7 @@ import {
   EvidenceBundle,
   FileSnapshotEvidence,
   GitEvidence,
+  AstEvidence,
 } from './types.js';
 import { validateWorkspacePath, assertSafeFilePath } from './security.js';
 import { computeFileSha256AndSize } from './hasher.js';
@@ -22,11 +23,12 @@ import { verifyEvidenceBundle } from './verifier.js';
 import { exportEvidenceReport } from './reporter.js';
 import { signEvidenceBundle } from './attestation.js';
 import { executeSandboxedCommand } from './runner.js';
+import { captureFileAstEvidence } from './ast.js';
 
 export function createEvidenceServer(): McpServer {
   const server = new McpServer({
     name: 'evidence-mcp',
-    version: '0.5.0',
+    version: '0.6.0',
   });
 
   // 1. create_evidence_bundle
@@ -343,6 +345,9 @@ export function createEvidenceServer(): McpServer {
         if (bundle.evidence.fileSnapshots) {
           bundle.evidence.fileSnapshots.forEach((f) => existingIds.add(f.id));
         }
+        if (bundle.evidence.ast) {
+          bundle.evidence.ast.forEach((a) => existingIds.add(a.id));
+        }
 
         // Validate that all referenced evidenceIds exist
         const missingIds = evidenceIds.filter((id) => !existingIds.has(id));
@@ -645,6 +650,95 @@ export function createEvidenceServer(): McpServer {
         return {
           isError: true,
           content: [{ type: 'text', text: `Failed to register workspace: ${message}` }],
+        };
+      }
+    }
+  );
+
+  // 11. capture_ast_evidence
+  server.tool(
+    'capture_ast_evidence',
+    'Extracts AST symbols, signatures, and computes semantic diffs (with Git HEAD comparison and breaking change detection) for target source files.',
+    {
+      bundleId: z.string().min(1).describe('The unique identifier of the evidence bundle.'),
+      files: z
+        .array(z.string().min(1))
+        .min(1)
+        .describe('Array of relative or absolute file paths to analyze within workspace.'),
+      workspaceName: z
+        .string()
+        .optional()
+        .describe('Optional name of the workspace for monorepo packages (defaults to "root").'),
+      workspacePath: z.string().optional().describe('Optional workspace root directory to locate the bundle.'),
+      compareWithGitHead: z
+        .boolean()
+        .default(true)
+        .describe('Whether to compare symbols against Git HEAD to detect changes and breaking changes.'),
+    },
+    async ({ bundleId, files, workspaceName, workspacePath, compareWithGitHead }) => {
+      try {
+        const bundle = await loadBundle(bundleId, workspacePath);
+        const targetWs = resolveWorkspaceForBundle(bundle, workspaceName);
+
+        if (!bundle.evidence.ast) {
+          bundle.evidence.ast = [];
+        }
+
+        const capturedItems: AstEvidence[] = [];
+
+        for (const filePath of files) {
+          const astEvidence = await captureFileAstEvidence({
+            filePath,
+            workspacePath: targetWs,
+            workspaceName,
+            compareWithGitHead,
+          });
+
+          bundle.evidence.ast.push(astEvidence);
+          capturedItems.push(astEvidence);
+        }
+
+        bundle.updatedAt = new Date().toISOString();
+        await saveBundle(bundle);
+
+        const summary = capturedItems.map((item) => ({
+          id: item.id,
+          filePath: item.filePath,
+          workspaceName: item.workspaceName || 'root',
+          language: item.language,
+          symbolsCount: item.symbolsCount,
+          hasSemanticChanges: item.diff?.hasChanges ?? false,
+          isBreakingChange: item.diff?.isBreakingChange ?? false,
+          diffSummary: item.diff
+            ? {
+                added: item.diff.addedSymbols.length,
+                removed: item.diff.removedSymbols.length,
+                modified: item.diff.modifiedSymbols.length,
+              }
+            : undefined,
+        }));
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  message: `Captured AST semantic evidence for ${capturedItems.length} file(s).`,
+                  bundleId: bundle.id,
+                  astEvidence: summary,
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `Failed to capture AST evidence: ${message}` }],
         };
       }
     }
