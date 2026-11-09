@@ -8,11 +8,19 @@ import { signEvidenceBundle } from './attestation.js';
 import { executeSandboxedCommand } from './runner.js';
 import { captureFileAstEvidence } from './ast.js';
 import { createVerificationProof, verifyProofSignature, replayEvidenceBundle } from './proof.js';
-import { CommandEvidence, VerificationProof, EvidenceBundle } from './types.js';
+import { createPeerEndorsement, checkBundleQuorum } from './consensus.js';
+import { generateGitHubStepSummary, writeToGitHubStepSummary } from './github-summary.js';
+import {
+  CommandEvidence,
+  VerificationProof,
+  EvidenceBundle,
+  PeerEndorsementRole,
+  PeerEndorsementVerdict,
+} from './types.js';
 import path from 'node:path';
 import fs from 'node:fs';
 
-const VERSION = '0.7.0';
+const VERSION = '0.8.0';
 
 export function printHelp(): void {
   console.log(`
@@ -32,18 +40,28 @@ Usage:
   evidence-mcp proof create <bundleId> [options]    Export a signed Ed25519 verification proof
   evidence-mcp proof verify <file|id> [options]     Verify cryptographic proof authenticity & digest
   evidence-mcp replay <bundleId> [options]          Replay evidence sequentially with reproducibility check
+  evidence-mcp endorse <bundleId> [options]         Append a signed peer review endorsement to a bundle
+  evidence-mcp quorum <bundleId> [options]          Check multi-agent consensus quorum compliance
+  evidence-mcp summary <bundleId> [options]         Generate GitHub Actions step summary markdown
   evidence-mcp --help, -h                           Show this help message
   evidence-mcp --version, -v                        Show version number
 
 Options:
   --workspace, -w <path>   Workspace directory path (defaults to current working directory)
   --format, -f <format>    Report format: markdown, json, or html (default: markdown)
-  --output, -o <file>      Write exported report or proof directly to file
+  --output, -o <file>      Write exported report, proof, or summary directly to file
   --key, -k <file>         Private key file for Ed25519 signing (auto-generates if omitted)
   --timeout <ms>           Execution timeout in milliseconds (default: 30000)
   --cwd <path>             Working directory relative to workspace root
   --no-diff                Do not compute semantic diff against Git HEAD
   --re-execute             Re-execute server commands during replay to verify reproducibility
+  --agent <id>             Agent identifier for endorsement (e.g. "agent:tester-v1")
+  --role <role>            Reviewer role: tester, security_auditor, architect, peer_reviewer
+  --verdict <verdict>      Endorsement verdict: approved, rejected, changes_requested
+  --comment <text>         Review commentary text
+  --min <count>            Minimum approved endorsements required for quorum (default: 1)
+  --roles <roles...>       Comma-separated list of required endorsement roles
+  --github                 Automatically append markdown to GITHUB_STEP_SUMMARY
 `);
 }
 
@@ -645,6 +663,188 @@ export async function runCli(args: string[]): Promise<number> {
       return replayResult.isReproducible ? 0 : 1;
     } catch (err: unknown) {
       console.error(`Replay error: ${(err as Error).message}`);
+      return 1;
+    }
+  }
+
+  // 10. Command: endorse <bundleId> [options]
+  if (firstArg === 'endorse') {
+    const bundleId = args[1];
+    if (!bundleId) {
+      console.error('Error: bundleId is required.\nUsage: evidence-mcp endorse <bundleId> [options]');
+      return 1;
+    }
+
+    let agentId: string | undefined;
+    let role: PeerEndorsementRole = 'peer_reviewer';
+    let verdict: PeerEndorsementVerdict = 'approved';
+    let comment = 'LGTM: Verified independently.';
+    let keyFile: string | undefined;
+    let workspace: string | undefined;
+
+    for (let i = 2; i < args.length; i++) {
+      if (args[i] === '--agent' && args[i + 1]) {
+        agentId = args[++i];
+      } else if (args[i] === '--role' && args[i + 1]) {
+        role = args[++i] as PeerEndorsementRole;
+      } else if (args[i] === '--verdict' && args[i + 1]) {
+        verdict = args[++i] as PeerEndorsementVerdict;
+      } else if (args[i] === '--comment' && args[i + 1]) {
+        comment = args[++i];
+      } else if ((args[i] === '--key' || args[i] === '-k') && args[i + 1]) {
+        keyFile = args[++i];
+      } else if ((args[i] === '--workspace' || args[i] === '-w') && args[i + 1]) {
+        workspace = args[++i];
+      }
+    }
+
+    if (!agentId) {
+      console.error('Error: --agent <id> is required for endorse command.');
+      return 1;
+    }
+
+    try {
+      const bundle = await loadBundle(bundleId, workspace);
+      let privateKeyPem: string | undefined;
+      if (keyFile) {
+        privateKeyPem = await fs.promises.readFile(path.resolve(keyFile), 'utf8');
+      }
+
+      const endorsement = await createPeerEndorsement({
+        bundle,
+        agentId,
+        role,
+        verdict,
+        comment,
+        privateKeyPem,
+        workspacePath: bundle.workspacePath,
+      });
+
+      console.log(`\nPeer Endorsement Recorded: ${endorsement.id}`);
+      console.log('================================================================================');
+      console.log(`Bundle ID:     ${bundle.id}`);
+      console.log(`Reviewer:      ${endorsement.agentId} (${endorsement.role})`);
+      console.log(`Verdict:       ${endorsement.verdict.toUpperCase()}`);
+      console.log(`Signer Key:    ${endorsement.signer.keyFingerprint}`);
+      console.log(`Comment:       ${endorsement.comment}`);
+      console.log(`Timestamp:     ${endorsement.timestamp}`);
+      console.log('================================================================================\n');
+
+      return 0;
+    } catch (err: unknown) {
+      console.error(`Endorsement error: ${(err as Error).message}`);
+      return 1;
+    }
+  }
+
+  // 11. Command: quorum <bundleId> [options]
+  if (firstArg === 'quorum') {
+    const bundleId = args[1];
+    if (!bundleId) {
+      console.error('Error: bundleId is required.\nUsage: evidence-mcp quorum <bundleId> [options]');
+      return 1;
+    }
+
+    let minEndorsements = 1;
+    let requiredRoles: PeerEndorsementRole[] = [];
+    let workspace: string | undefined;
+
+    for (let i = 2; i < args.length; i++) {
+      if (args[i] === '--min' && args[i + 1]) {
+        minEndorsements = parseInt(args[++i], 10);
+      } else if (args[i] === '--roles' && args[i + 1]) {
+        requiredRoles = args[++i].split(',').map((r) => r.trim() as PeerEndorsementRole);
+      } else if ((args[i] === '--workspace' || args[i] === '-w') && args[i + 1]) {
+        workspace = args[++i];
+      }
+    }
+
+    try {
+      const bundle = await loadBundle(bundleId, workspace);
+      const quorumResult = checkBundleQuorum(bundle, {
+        minEndorsements,
+        requiredRoles: requiredRoles.length > 0 ? requiredRoles : undefined,
+      });
+
+      console.log(`\nConsensus Quorum Check: ${bundle.id}`);
+      console.log('================================================================================');
+      console.log(`Quorum Satisfied: ${quorumResult.satisfied ? 'YES (PASSED)' : 'NO (NOT MET)'}`);
+      console.log(
+        `Approvals:        ${quorumResult.approvedCount}/${quorumResult.policy.minEndorsements || 1} required`
+      );
+      console.log(`Rejections:       ${quorumResult.rejectionsCount}`);
+      console.log(`Total Reviews:    ${quorumResult.totalEndorsements}`);
+      console.log(`Valid Signatures: ${quorumResult.verifiedSignatures}`);
+      if (quorumResult.reasons.length > 0) {
+        console.log('Findings / Violations:');
+        for (const r of quorumResult.reasons) {
+          console.log(`  - ${r}`);
+        }
+      }
+      console.log('================================================================================\n');
+
+      return quorumResult.satisfied ? 0 : 1;
+    } catch (err: unknown) {
+      console.error(`Quorum error: ${(err as Error).message}`);
+      return 1;
+    }
+  }
+
+  // 12. Command: summary <bundleId> [options]
+  if (firstArg === 'summary') {
+    const bundleId = args[1];
+    if (!bundleId) {
+      console.error('Error: bundleId is required.\nUsage: evidence-mcp summary <bundleId> [options]');
+      return 1;
+    }
+
+    let workspace: string | undefined;
+    let outputFile: string | undefined;
+    let writeGitHub = false;
+
+    for (let i = 2; i < args.length; i++) {
+      if ((args[i] === '--workspace' || args[i] === '-w') && args[i + 1]) {
+        workspace = args[++i];
+      } else if ((args[i] === '--output' || args[i] === '-o') && args[i + 1]) {
+        outputFile = args[++i];
+      } else if (args[i] === '--github') {
+        writeGitHub = true;
+      }
+    }
+
+    try {
+      const bundle = await loadBundle(bundleId, workspace);
+      const verification = await verifyEvidenceBundle(bundle);
+      const quorum = checkBundleQuorum(bundle);
+
+      const summaryMarkdown = generateGitHubStepSummary({
+        bundle,
+        verification,
+        quorum,
+      });
+
+      if (outputFile) {
+        const outPath = path.resolve(outputFile);
+        await fs.promises.mkdir(path.dirname(outPath), { recursive: true });
+        await fs.promises.writeFile(outPath, summaryMarkdown, 'utf8');
+        console.log(`Step summary written to: ${outPath}`);
+      }
+
+      if (writeGitHub) {
+        const wrote = await writeToGitHubStepSummary(summaryMarkdown);
+        if (wrote) {
+          console.log(`Summary successfully appended to $GITHUB_STEP_SUMMARY`);
+        } else {
+          console.warn(`GITHUB_STEP_SUMMARY environment variable not set; printed to stdout instead.`);
+          console.log(summaryMarkdown);
+        }
+      } else if (!outputFile) {
+        console.log(summaryMarkdown);
+      }
+
+      return 0;
+    } catch (err: unknown) {
+      console.error(`Summary error: ${(err as Error).message}`);
       return 1;
     }
   }

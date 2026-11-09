@@ -15,7 +15,7 @@ export function lookupBundleWorkspace(bundleId: string): string | undefined {
   return bundleWorkspaceRegistry.get(bundleId);
 }
 
-export function generateId(prefix: 'bundle' | 'git' | 'cmd' | 'file' | 'assert' | 'ast' | 'proof'): string {
+export function generateId(prefix: 'bundle' | 'git' | 'cmd' | 'file' | 'assert' | 'ast' | 'proof' | 'endorse'): string {
   const shortId = crypto.randomUUID().slice(0, 8);
   return `${prefix}_${shortId}`;
 }

@@ -122,6 +122,7 @@ export interface EvidenceBundle {
   updatedAt: string;
   metadata?: Record<string, unknown>;
   attestation?: BundleAttestation;
+  endorsements?: PeerEndorsement[];
   evidence: {
     git?: GitEvidence[];
     commands?: CommandEvidence[];
@@ -308,3 +309,75 @@ export const VerifyReplayProofSchema = z.object({
   workspacePath: z.string().optional(),
 });
 export type VerifyReplayProofInput = z.infer<typeof VerifyReplayProofSchema>;
+
+// ==========================================
+// Multi-Agent Consensus & Quorum Types
+// ==========================================
+
+export type PeerEndorsementRole =
+  | 'tester'
+  | 'security_auditor'
+  | 'architect'
+  | 'peer_reviewer';
+
+export type PeerEndorsementVerdict =
+  | 'approved'
+  | 'rejected'
+  | 'changes_requested';
+
+export interface PeerEndorsement {
+  id: string;
+  agentId: string;
+  role: PeerEndorsementRole;
+  verdict: PeerEndorsementVerdict;
+  comment: string;
+  timestamp: string;
+  bundleDigest: string;
+  signer: {
+    algorithm: 'ed25519';
+    publicKeyPem: string;
+    keyFingerprint: string;
+  };
+  signature: string;
+}
+
+export interface QuorumPolicy {
+  minEndorsements?: number;
+  requiredRoles?: PeerEndorsementRole[];
+  requireUniqueSigners?: boolean;
+  disallowRejections?: boolean;
+}
+
+export interface QuorumResult {
+  bundleId: string;
+  satisfied: boolean;
+  totalEndorsements: number;
+  approvedCount: number;
+  rejectionsCount: number;
+  changesRequestedCount: number;
+  verifiedSignatures: number;
+  policy: QuorumPolicy;
+  reasons: string[];
+  endorsements: PeerEndorsement[];
+}
+
+export const EndorseEvidenceBundleSchema = z.object({
+  bundleId: z.string().min(1, 'bundleId is required.'),
+  agentId: z.string().min(1, 'agentId is required.'),
+  role: z.enum(['tester', 'security_auditor', 'architect', 'peer_reviewer']),
+  verdict: z.enum(['approved', 'rejected', 'changes_requested']),
+  comment: z.string().min(1, 'Review commentary is required.'),
+  privateKeyPem: z.string().optional(),
+  workspacePath: z.string().optional(),
+});
+export type EndorseEvidenceBundleInput = z.infer<typeof EndorseEvidenceBundleSchema>;
+
+export const CheckBundleQuorumSchema = z.object({
+  bundleId: z.string().min(1, 'bundleId is required.'),
+  minEndorsements: z.number().int().min(1).default(1),
+  requiredRoles: z.array(z.enum(['tester', 'security_auditor', 'architect', 'peer_reviewer'])).optional(),
+  requireUniqueSigners: z.boolean().default(true),
+  disallowRejections: z.boolean().default(true),
+  workspacePath: z.string().optional(),
+});
+export type CheckBundleQuorumInput = z.infer<typeof CheckBundleQuorumSchema>;

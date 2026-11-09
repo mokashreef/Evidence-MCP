@@ -26,11 +26,12 @@ import { signEvidenceBundle } from './attestation.js';
 import { executeSandboxedCommand } from './runner.js';
 import { captureFileAstEvidence } from './ast.js';
 import { createVerificationProof, verifyProofSignature } from './proof.js';
+import { createPeerEndorsement, checkBundleQuorum } from './consensus.js';
 
 export function createEvidenceServer(): McpServer {
   const server = new McpServer({
     name: 'evidence-mcp',
-    version: '0.7.0',
+    version: '0.8.0',
   });
 
   // 1. create_evidence_bundle
@@ -857,6 +858,139 @@ export function createEvidenceServer(): McpServer {
         return {
           isError: true,
           content: [{ type: 'text', text: `Failed to verify proof: ${message}` }],
+        };
+      }
+    }
+  );
+
+  // 14. endorse_evidence_bundle
+  server.tool(
+    'endorse_evidence_bundle',
+    'Appends an independent, cryptographically signed peer review endorsement to an evidence bundle.',
+    {
+      bundleId: z.string().min(1).describe('The unique identifier of the evidence bundle to endorse.'),
+      agentId: z.string().min(1).describe('Unique identifier of the reviewing agent (e.g. "agent:tester-v1").'),
+      role: z
+        .enum(['tester', 'security_auditor', 'architect', 'peer_reviewer'])
+        .describe('Reviewing agent professional role.'),
+      verdict: z
+        .enum(['approved', 'rejected', 'changes_requested'])
+        .describe('Review endorsement verdict.'),
+      comment: z.string().min(1).describe('Detailed evaluation commentary supporting the verdict.'),
+      privateKeyPem: z.string().optional().describe('Optional PEM-encoded private key for signing endorsement.'),
+      workspacePath: z.string().optional().describe('Optional workspace path hint to locate the bundle.'),
+    },
+    async ({ bundleId, agentId, role, verdict, comment, privateKeyPem, workspacePath }) => {
+      try {
+        const bundle = await loadBundle(bundleId, workspacePath);
+        const endorsement = await createPeerEndorsement({
+          bundle,
+          agentId,
+          role,
+          verdict,
+          comment,
+          privateKeyPem,
+          workspacePath: bundle.workspacePath,
+        });
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  message: `Peer endorsement recorded and cryptographically signed successfully.`,
+                  endorsementId: endorsement.id,
+                  bundleId: bundle.id,
+                  agentId: endorsement.agentId,
+                  role: endorsement.role,
+                  verdict: endorsement.verdict,
+                  bundleDigest: endorsement.bundleDigest,
+                  signerFingerprint: endorsement.signer.keyFingerprint,
+                  timestamp: endorsement.timestamp,
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `Failed to endorse bundle: ${message}` }],
+        };
+      }
+    }
+  );
+
+  // 15. check_bundle_quorum
+  server.tool(
+    'check_bundle_quorum',
+    'Evaluates consensus quorum rules across all peer endorsements on an evidence bundle.',
+    {
+      bundleId: z.string().min(1).describe('The unique identifier of the evidence bundle.'),
+      minEndorsements: z.number().int().min(1).default(1).describe('Minimum number of approved endorsements required.'),
+      requiredRoles: z
+        .array(z.enum(['tester', 'security_auditor', 'architect', 'peer_reviewer']))
+        .optional()
+        .describe('Array of required reviewer roles (e.g. ["tester", "security_auditor"]).'),
+      requireUniqueSigners: z.boolean().default(true).describe('Enforce unique signer keys and agent IDs.'),
+      disallowRejections: z.boolean().default(true).describe('Fail quorum if any explicit rejection exists.'),
+      workspacePath: z.string().optional().describe('Optional workspace path hint to locate the bundle.'),
+    },
+    async ({
+      bundleId,
+      minEndorsements,
+      requiredRoles,
+      requireUniqueSigners,
+      disallowRejections,
+      workspacePath,
+    }) => {
+      try {
+        const bundle = await loadBundle(bundleId, workspacePath);
+        const quorumResult = checkBundleQuorum(bundle, {
+          minEndorsements,
+          requiredRoles,
+          requireUniqueSigners,
+          disallowRejections,
+        });
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  bundleId: quorumResult.bundleId,
+                  satisfied: quorumResult.satisfied,
+                  totalEndorsements: quorumResult.totalEndorsements,
+                  approvedCount: quorumResult.approvedCount,
+                  rejectionsCount: quorumResult.rejectionsCount,
+                  verifiedSignatures: quorumResult.verifiedSignatures,
+                  policy: quorumResult.policy,
+                  reasons: quorumResult.reasons,
+                  endorsements: quorumResult.endorsements.map((e) => ({
+                    id: e.id,
+                    agentId: e.agentId,
+                    role: e.role,
+                    verdict: e.verdict,
+                    signerFingerprint: e.signer.keyFingerprint,
+                    timestamp: e.timestamp,
+                  })),
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `Failed to check bundle quorum: ${message}` }],
         };
       }
     }

@@ -10,4 +10,6 @@ export * from './attestation.js';
 export * from './runner.js';
 export * from './ast.js';
 export * from './proof.js';
+export * from './consensus.js';
+export * from './github-summary.js';
 export { runCli, printHelp } from './cli.js';
