@@ -7,6 +7,8 @@ import {
   sanitizeEnvironment,
   resolveCommandInvocation,
   executeSandboxedCommand,
+  setMaxRunnerConcurrency,
+  getActiveRunnerProcesses,
   ALLOWED_COMMANDS,
   FORBIDDEN_COMMANDS,
 } from '../src/runner.js';
@@ -374,6 +376,36 @@ describe('Sandboxed Command Runner & Execution Security', () => {
       expect(cmdEv.provenance).toBe('server_executed');
       expect(cmdEv.exitCode).toBe(0);
       expect(cmdEv.stdout).toContain('cli execution verified');
+    });
+
+    it('limits concurrent command executions with active process semaphore', async () => {
+      setMaxRunnerConcurrency(2);
+
+      const promises = [
+        executeSandboxedCommand({
+          command: 'node',
+          args: ['-e', 'setTimeout(() => process.exit(0), 100)'],
+          workspacePath: tempWorkspace,
+        }),
+        executeSandboxedCommand({
+          command: 'node',
+          args: ['-e', 'setTimeout(() => process.exit(0), 100)'],
+          workspacePath: tempWorkspace,
+        }),
+        executeSandboxedCommand({
+          command: 'node',
+          args: ['-e', 'setTimeout(() => process.exit(0), 100)'],
+          workspacePath: tempWorkspace,
+        }),
+      ];
+
+      expect(getActiveRunnerProcesses()).toBeLessThanOrEqual(2);
+      const results = await Promise.all(promises);
+      expect(results.length).toBe(3);
+      expect(results.every((r) => r.exitCode === 0)).toBe(true);
+
+      // Reset to default
+      setMaxRunnerConcurrency(4);
     });
   });
 });
