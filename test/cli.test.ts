@@ -211,4 +211,42 @@ describe('Evidence MCP Standalone CLI', () => {
     expect(await runCli(['report'])).toBe(1);
     expect(errSpy).toHaveBeenCalled();
   });
+
+  it('bootstraps policy file and gitignore with init command', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    const exitCode = await runCli(['init', '--workspace', tempWorkspace]);
+    expect(exitCode).toBe(0);
+
+    const policyFile = path.join(tempWorkspace, 'evidence.policy.json');
+    expect(fs.existsSync(policyFile)).toBe(true);
+
+    const policyContent = JSON.parse(await fs.promises.readFile(policyFile, 'utf8'));
+    expect(policyContent.version).toBe('1.0');
+    expect(policyContent.files?.disallowedPatterns).toContain('.env');
+
+    const gitignoreFile = path.join(tempWorkspace, '.gitignore');
+    expect(fs.existsSync(gitignoreFile)).toBe(true);
+    const gitignoreContent = await fs.promises.readFile(gitignoreFile, 'utf8');
+    expect(gitignoreContent).toContain('.evidence-mcp/');
+
+    // Calling init again without force reports already existed
+    const secondExit = await runCli(['init', '--workspace', tempWorkspace]);
+    expect(secondExit).toBe(0);
+    expect(logSpy.mock.calls.some((c) => c[0].includes('Already existed'))).toBe(true);
+
+    // Calling init with --preset strict --force overwrites
+    const strictExit = await runCli([
+      'init',
+      '--workspace',
+      tempWorkspace,
+      '--preset',
+      'strict',
+      '--force',
+    ]);
+    expect(strictExit).toBe(0);
+    const updatedPolicy = JSON.parse(await fs.promises.readFile(policyFile, 'utf8'));
+    expect(updatedPolicy.attestation?.requireSignature).toBe(true);
+    expect(updatedPolicy.git?.requireCleanWorkingTree).toBe(true);
+  });
 });

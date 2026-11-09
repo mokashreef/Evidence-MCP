@@ -643,3 +643,137 @@ export function evaluateEvidencePolicy(options: {
     evaluations,
   };
 }
+
+// ==========================================
+// Policy Presets & Bootstrapping Wizard
+// ==========================================
+
+export type PolicyPreset = 'recommended' | 'strict' | 'permissive';
+
+export const POLICY_PRESETS: Record<PolicyPreset, EvidencePolicy> = {
+  recommended: {
+    version: '1.0',
+    description: 'Recommended policy balance for high-integrity agentic coding',
+    git: {
+      requireCleanWorkingTree: false,
+      disallowDetachedHead: true,
+    },
+    files: {
+      disallowedPatterns: ['.env', '.env.*', '*.pem', 'id_rsa*', '**/secrets/**', '**/*.key'],
+    },
+    commands: {
+      requireServerExecutedCommands: true,
+      disallowNonZeroExitCodes: true,
+    },
+    assertions: {
+      disallowUnverifiable: true,
+    },
+  },
+  strict: {
+    version: '1.0',
+    description: 'Strict production policy requiring clean git, signed attestations, and consensus',
+    git: {
+      requireCleanWorkingTree: true,
+      disallowDetachedHead: true,
+      allowedBranches: ['main', 'master', 'release/*'],
+    },
+    files: {
+      disallowedPatterns: ['.env', '.env.*', '*.pem', 'id_rsa*', '**/secrets/**', '**/*.key', 'credentials.json'],
+    },
+    commands: {
+      requireServerExecutedCommands: true,
+      minServerExecutedCommands: 1,
+      disallowNonZeroExitCodes: true,
+    },
+    ast: {
+      requireAstEvidence: true,
+      disallowBreakingChanges: true,
+    },
+    assertions: {
+      minAssertions: 1,
+      disallowUnverifiable: true,
+    },
+    attestation: {
+      requireSignature: true,
+    },
+    consensus: {
+      minEndorsements: 1,
+      requireUniqueSigners: true,
+      disallowRejections: true,
+    },
+  },
+  permissive: {
+    version: '1.0',
+    description: 'Permissive development policy with minimal constraints for experimentation',
+    git: {
+      requireCleanWorkingTree: false,
+      disallowDetachedHead: false,
+    },
+    files: {
+      disallowedPatterns: ['.env', '*.key', '*.pem'],
+    },
+  },
+};
+
+export interface InitPolicyOptions {
+  workspacePath?: string;
+  preset?: PolicyPreset;
+  force?: boolean;
+  updateGitignore?: boolean;
+}
+
+export interface InitPolicyResult {
+  policyPath: string;
+  created: boolean;
+  gitignoreUpdated: boolean;
+  preset: PolicyPreset;
+  policy: EvidencePolicy;
+}
+
+/**
+ * Bootstraps an evidence.policy.json in the workspace with standard presets
+ * and optionally updates .gitignore to ignore .evidence-mcp storage.
+ */
+export async function initWorkspacePolicy(
+  options: InitPolicyOptions = {}
+): Promise<InitPolicyResult> {
+  const baseDir = options.workspacePath ? path.resolve(options.workspacePath) : process.cwd();
+  const policyFile = path.join(baseDir, 'evidence.policy.json');
+  const presetKey: PolicyPreset = options.preset || 'recommended';
+  const policy = POLICY_PRESETS[presetKey] || POLICY_PRESETS.recommended;
+
+  let created = false;
+  if (!fs.existsSync(policyFile) || options.force) {
+    await fs.promises.mkdir(baseDir, { recursive: true });
+    await fs.promises.writeFile(policyFile, JSON.stringify(policy, null, 2) + '\n', 'utf8');
+    created = true;
+  }
+
+  let gitignoreUpdated = false;
+  if (options.updateGitignore !== false) {
+    const gitignorePath = path.join(baseDir, '.gitignore');
+    let content = '';
+    if (fs.existsSync(gitignorePath)) {
+      content = await fs.promises.readFile(gitignorePath, 'utf8');
+    }
+    const lines = content.split(/\r?\n/);
+    const hasEvidenceDir = lines.some(
+      (l) => l.trim() === '.evidence-mcp' || l.trim() === '.evidence-mcp/'
+    );
+    if (!hasEvidenceDir) {
+      const addition =
+        (content.length > 0 && !content.endsWith('\n') ? '\n' : '') +
+        '# Evidence MCP data store\n.evidence-mcp/\n';
+      await fs.promises.appendFile(gitignorePath, addition, 'utf8');
+      gitignoreUpdated = true;
+    }
+  }
+
+  return {
+    policyPath: policyFile,
+    created,
+    gitignoreUpdated,
+    preset: presetKey,
+    policy,
+  };
+}

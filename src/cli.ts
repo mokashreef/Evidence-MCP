@@ -10,7 +10,7 @@ import { captureFileAstEvidence } from './ast.js';
 import { createVerificationProof, verifyProofSignature, replayEvidenceBundle } from './proof.js';
 import { createPeerEndorsement, checkBundleQuorum } from './consensus.js';
 import { generateGitHubStepSummary, writeToGitHubStepSummary } from './github-summary.js';
-import { evaluateEvidencePolicy, loadPolicyFile } from './policy.js';
+import { evaluateEvidencePolicy, loadPolicyFile, initWorkspacePolicy, PolicyPreset } from './policy.js';
 import { dispatchAuditWebhook } from './webhook.js';
 import { registerTrustedAgent, revokeTrustedAgent, listTrustedAgents } from './registry.js';
 import {
@@ -52,11 +52,15 @@ Usage:
   evidence-mcp registry add <agentId> <keyFile>     Register a trusted agent key in workspace
   evidence-mcp registry list [options]              List all registered agents in workspace registry
   evidence-mcp registry revoke <agentId> <reason>   Revoke a trusted agent key in registry
+  evidence-mcp init [options]                       Bootstrap evidence.policy.json configuration
   evidence-mcp --help, -h                           Show this help message
   evidence-mcp --version, -v                        Show version number
 
 Options:
   --workspace, -w <path>   Workspace directory path (defaults to current working directory)
+  --preset <profile>       Policy preset for init: recommended, strict, or permissive
+  --force, -f              Overwrite existing policy file during init
+  --no-gitignore           Skip adding .evidence-mcp/ to .gitignore during init
   --format, -f <format>    Report format: markdown, json, or html (default: markdown)
   --output, -o <file>      Write exported report, proof, or summary directly to file
   --key, -k <file>         Private key file for Ed25519 signing (auto-generates if omitted)
@@ -1152,6 +1156,55 @@ export async function runCli(args: string[]): Promise<number> {
 
     console.error(`Unknown registry action: "${subAction}". Expected "add", "list", or "revoke".`);
     return 1;
+  }
+
+  // 15. Command: init [options]
+  if (firstArg === 'init') {
+    let workspace: string | undefined;
+    let preset: PolicyPreset = 'recommended';
+    let force = false;
+    let updateGitignore = true;
+
+    for (let i = 1; i < args.length; i++) {
+      if ((args[i] === '--workspace' || args[i] === '-w') && args[i + 1]) {
+        workspace = args[++i];
+      } else if (args[i] === '--preset' && args[i + 1]) {
+        const val = args[++i].toLowerCase();
+        if (val === 'strict' || val === 'permissive' || val === 'recommended') {
+          preset = val;
+        } else {
+          console.error(`Unknown preset "${val}". Available presets: recommended, strict, permissive.`);
+          return 1;
+        }
+      } else if (args[i] === '--force' || args[i] === '-f') {
+        force = true;
+      } else if (args[i] === '--no-gitignore') {
+        updateGitignore = false;
+      }
+    }
+
+    const targetWs = workspace ? path.resolve(workspace) : process.cwd();
+    try {
+      const result = await initWorkspacePolicy({
+        workspacePath: targetWs,
+        preset,
+        force,
+        updateGitignore,
+      });
+
+      console.log(`\nEvidence Policy Initialization`);
+      console.log('='.repeat(80));
+      console.log(`Workspace:       ${targetWs}`);
+      console.log(`Preset:          ${result.preset}`);
+      console.log(`Policy File:     ${result.policyPath}`);
+      console.log(`Created:         ${result.created ? 'YES (Generated)' : 'NO (Already existed, use --force to overwrite)'}`);
+      console.log(`Gitignore Added: ${result.gitignoreUpdated ? 'YES (.evidence-mcp/ added)' : 'SKIPPED / ALREADY PRESENT'}`);
+      console.log('='.repeat(80) + '\n');
+      return 0;
+    } catch (err: unknown) {
+      console.error(`Init error: ${(err as Error).message}`);
+      return 1;
+    }
   }
 
   console.error(`Unknown command: "${firstArg}". Run "evidence-mcp --help" for available commands.`);
