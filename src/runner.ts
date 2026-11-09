@@ -232,6 +232,39 @@ export function resolveCommandInvocation(
   return { binary: command, finalArgs: [...args] };
 }
 
+let activeProcessCount = 0;
+let maxConcurrency = 4;
+const waitingQueue: Array<() => void> = [];
+
+export function setMaxRunnerConcurrency(n: number): void {
+  maxConcurrency = Math.max(1, n);
+}
+
+export function getActiveRunnerProcesses(): number {
+  return activeProcessCount;
+}
+
+async function acquireExecutionSlot(): Promise<void> {
+  if (activeProcessCount < maxConcurrency) {
+    activeProcessCount++;
+    return;
+  }
+  return new Promise<void>((resolve) => {
+    waitingQueue.push(() => {
+      activeProcessCount++;
+      resolve();
+    });
+  });
+}
+
+function releaseExecutionSlot(): void {
+  activeProcessCount--;
+  if (waitingQueue.length > 0 && activeProcessCount < maxConcurrency) {
+    const next = waitingQueue.shift();
+    if (next) next();
+  }
+}
+
 /**
  * Executes an approved command within a strictly bounded runner environment.
  */
@@ -286,10 +319,12 @@ export async function executeSandboxedCommand(
   const env = sanitizeEnvironment(options.env);
   const { binary, finalArgs } = resolveCommandInvocation(command, args);
 
+  await acquireExecutionSlot();
   const startTime = Date.now();
   const executedAt = new Date().toISOString();
 
-  return new Promise<RunnerExecutionResult>((resolve) => {
+  try {
+    return await new Promise<RunnerExecutionResult>((resolve) => {
     let stdoutBuffer = '';
     let stderrBuffer = '';
     let timedOut = false;
@@ -397,4 +432,7 @@ export async function executeSandboxedCommand(
       });
     });
   });
+} finally {
+  releaseExecutionSlot();
+}
 }
