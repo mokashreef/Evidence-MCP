@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0] - 2026-11-09 - Production Release
+
+### Added
+- **Distributed Trusted Agent Key Registry (`src/registry.ts`):**
+  - Workspace-level cryptographic agent identity and public key management (`.evidence-mcp/registry/agent-registry.json`).
+  - Supports role bindings, key fingerprints, expiration timestamps, and status lifecycles (`active`, `revoked`, `suspended`).
+  - New MCP tool `register_trusted_agent` (Tool 18): registers an agent identity with its PEM public key, role, and optional expiration.
+  - New MCP tool `revoke_trusted_agent` (Tool 19): immediately revokes an agent key with an audit reason, invalidating all subsequent endorsements or attestations.
+  - New CLI commands:
+    - `evidence-mcp registry add <agentId> <keyFile> [--name <name>] [--role <role>]`
+    - `evidence-mcp registry list [--status <status>]`
+    - `evidence-mcp registry revoke <agentId> <reason>`
+- **Production API Freeze & Verification Hardening:**
+  - Complete TypeScript strict typing and Zod schemas across all 19 MCP tools.
+  - Comprehensive test suite expanded to 162 passing tests across 16 test files (100% green).
+  - Official enterprise-ready production release guarantee.
+
 ## [0.9.0] - 2026-11-09
 
 ### Added

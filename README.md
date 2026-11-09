@@ -100,9 +100,9 @@ All data is stored locally in human-readable JSON files inside the workspace roo
 
 ---
 
-## Tools Catalog (v0.9.0)
+## Tools Catalog (v1.0.0)
 
-Evidence MCP provides seventeen focused tools through the Model Context Protocol:
+Evidence MCP provides nineteen focused tools through the Model Context Protocol:
 
 | Tool | Purpose | Key Inputs | Output |
 |---|---|---|---|
@@ -123,6 +123,8 @@ Evidence MCP provides seventeen focused tools through the Model Context Protocol
 | `check_bundle_quorum` | Evaluates multi-agent peer endorsements against a strict quorum policy | `bundleId`, `policy` (`minEndorsements`, `requiredRoles`, `disallowRejections`, `requireUniqueSigners`) | `satisfied` (boolean), `approvedCount`, `rejectedCount`, `missingRoles`, `failures` |
 | `evaluate_evidence_policy` | Evaluates bundle compliance against declarative rules in `evidence.policy.json` | `bundleId`, `policyPath?`, `policy?`, `strict?`, `workspacePath?` | `passed` (boolean), `summary`, `rulesEvaluated`, `evaluations` |
 | `dispatch_webhook_audit` | Dispatches an HMAC-SHA256 authenticated audit payload to a webhook URL | `bundleId`, `webhookUrl`, `secretToken?`, `includeProof?`, `headers?`, `timeoutMs?` | `delivered` (boolean), `statusCode`, `signatureHeader`, `durationMs` |
+| `register_trusted_agent` | Registers an authorized agent public key and role in the workspace registry | `agentId`, `name`, `role`, `publicKeyPem`, `expiresAt?`, `metadata?` | `agentId`, `name`, `role`, `keyFingerprint`, `status`, `registeredAt` |
+| `revoke_trusted_agent` | Revokes a trusted agent key in the registry with an audit reason | `agentId`, `reason`, `workspacePath?` | `agentId`, `status: 'revoked'`, `revokedAt`, `revocationReason` |
 
 ---
 
@@ -253,13 +255,25 @@ node dist/cli.js webhook bundle_9a41f0bc https://audit.example.com/api/v1/eviden
 node dist/cli.js webhook bundle_9a41f0bc https://audit.example.com/api/v1/evidence --secret my-secret-token --proof
 ```
 
+### 15. Distributed Agent Key Registry Management
+```bash
+# Register a trusted agent public key with specific functional role:
+node dist/cli.js registry add agent:security-guard ./keys/sec_agent.pub --name "SecBot" --role security_auditor
+
+# List all registered agents and their statuses (active, revoked, suspended):
+node dist/cli.js registry list
+
+# Revoke a compromised or decommissioned agent key:
+node dist/cli.js registry revoke agent:security-guard "Key rotated for next sprint"
+```
+
 ### CI/CD Pipeline Integration (GitHub Actions)
 
 Evidence MCP provides an official composite action (`action.yml`) for seamless GitHub Actions CI/CD pipeline integration:
 
 ```yaml
 - name: Verify Agent Evidence, Quorum & Compliance Policy
-  uses: mokashreef/Evidence-MCP@v0.9.0
+  uses: mokashreef/Evidence-MCP@v1.0.0
   with:
     bundle-id: ${{ env.BUNDLE_ID }}
     require-quorum: 'true'
@@ -452,6 +466,19 @@ Here is how an agent interacts with Evidence MCP during a coding assignment:
 ```
 *Returns:* `{ "delivered": true, "statusCode": 200, "signatureHeader": "sha256=...", "durationMs": 45 }`
 
+### 12. Register and Manage Trusted Agent Keys
+```json
+// Call: register_trusted_agent
+{
+  "agentId": "agent:sec-auditor-1",
+  "name": "Security Auditor Agent",
+  "role": "security_auditor",
+  "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA...",
+  "expiresAt": "2027-12-31T23:59:59Z"
+}
+```
+*Returns:* `{ "agentId": "agent:sec-auditor-1", "status": "active", "keyFingerprint": "8f3d1b...", "registeredAt": "2026-11-09T..." }`
+
 ---
 
 ## Security & Privacy Model
@@ -518,9 +545,11 @@ npm run build
 
 ---
 
-## Scope & Boundaries (v0.9.0)
+## Scope & Boundaries (v1.0.0)
 
-### Strictly In Scope for v0.9.0
+### Strictly In Scope for v1.0.0
+- Distributed Trusted Agent Key Registry (`register_trusted_agent` & `revoke_trusted_agent` tools, and `evidence-mcp registry` CLI).
+- Workspace-level cryptographic agent identity lifecycle management (`active`, `revoked`, `suspended`) with expiration verification.
 - Declarative Automated Evidence Policy Engine (`evaluate_evidence_policy` tool and `evidence-mcp policy` CLI).
 - Multi-dimensional compliance rules evaluated against Git state, file patterns, server command execution, AST breaking change detection, assertion backing, signatures, and consensus quorum.
 - Zero-external-dependency glob-like file pattern matcher supporting wildcards, extensions, and directory prefixes.
@@ -553,13 +582,13 @@ npm run build
 - Deterministic canonical payload serialization (`getCanonicalPayload`) for tamper resistance.
 - Cryptographic signature re-verification in `verify_evidence_bundle` and CLI `verify`.
 - Local file persistence under `.evidence-mcp/bundles/`, `.evidence-mcp/proofs/`, and key pairs under `.evidence-mcp/keys/`.
-- Standalone CLI interface (`verify`, `list`, `report`, `sign`, `exec`, `workspace`, `ast`, `proof`, `replay`, `endorse`, `quorum`, `summary`, `policy`, `webhook`) with CI exit codes.
+- Standalone CLI interface (`verify`, `list`, `report`, `sign`, `exec`, `workspace`, `ast`, `proof`, `replay`, `endorse`, `quorum`, `summary`, `policy`, `webhook`, `registry`) with CI exit codes.
 - Interactive, responsive, offline-safe HTML report generation with multi-workspace tables, AST symbol catalogs, peer endorsements, and badges.
 - Mandatory evidence-linked assertions.
 - Live verification of file hashes, Git status, AST symbols, and cryptographic signatures.
 - Markdown, JSON, and HTML report exporting.
 
-### Out of Scope for v0.9.0
+### Out of Scope for v1.0.0
 - **Direct Arbitrary Shell Command Execution:** Raw shell strings (e.g. `bash -c "..."`) without security boundaries are strictly rejected.
 - **Remote Publishing / Cloud Syncing:** Evidence bundles are local to the workspace. There is no auto-pushing to remote cloud APIs or external issue trackers.
 
@@ -575,6 +604,7 @@ npm run build
 - **v0.8 (Completed):** Multi-agent cross-verification consensus protocol & GitHub Step Summary composite action.
 - **v0.9 (Completed):** Automated evidence policy engine & HMAC-signed audit webhooks.
 - **v1.0 (Production Release):** Stable API freeze, distributed agent attestation registry, and multi-tenant bundle signing.
+- **v1.1:** WebAssembly AST parsers for Rust/Go/Python and remote notary attestations.
 
 ---
 
