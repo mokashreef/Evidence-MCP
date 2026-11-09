@@ -420,6 +420,12 @@ export interface EvidencePolicyAttestationRules {
   allowedFingerprints?: string[];
 }
 
+export interface EvidencePolicyLicenseRules {
+  requireLicenseField?: boolean;
+  allowedLicenses?: string[];
+  disallowedLicenses?: string[];
+}
+
 export interface EvidencePolicy {
   version?: '1' | '1.0';
   description?: string;
@@ -430,11 +436,12 @@ export interface EvidencePolicy {
   assertions?: EvidencePolicyAssertionRules;
   attestation?: EvidencePolicyAttestationRules;
   consensus?: QuorumPolicy;
+  license?: EvidencePolicyLicenseRules;
 }
 
 export interface PolicyRuleEvaluation {
   rule: string;
-  category: 'git' | 'files' | 'commands' | 'ast' | 'assertions' | 'attestation' | 'consensus';
+  category: 'git' | 'files' | 'commands' | 'ast' | 'assertions' | 'attestation' | 'consensus' | 'license';
   passed: boolean;
   message: string;
   severity: 'error' | 'warning';

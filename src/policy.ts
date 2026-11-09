@@ -620,6 +620,127 @@ export function evaluateEvidencePolicy(options: {
     }
   }
 
+  // 8. License Compliance Rules
+  if (policy.license) {
+    const { requireLicenseField, allowedLicenses, disallowedLicenses } = policy.license;
+
+    const workspacesToCheck = new Set<string>();
+    if (bundle.workspacePath) {
+      workspacesToCheck.add(path.resolve(bundle.workspacePath));
+    }
+    if (bundle.workspaces) {
+      for (const p of Object.values(bundle.workspaces)) {
+        workspacesToCheck.add(path.resolve(p));
+      }
+    }
+
+    for (const ws of workspacesToCheck) {
+      const pkgJsonPath = path.join(ws, 'package.json');
+      let pkgLicense: string | undefined;
+      let pkgFound = false;
+
+      if (fs.existsSync(pkgJsonPath)) {
+        try {
+          const content = fs.readFileSync(pkgJsonPath, 'utf8');
+          const pkg = JSON.parse(content) as Record<string, unknown>;
+          pkgFound = true;
+          if (typeof pkg.license === 'string') {
+            pkgLicense = pkg.license.trim();
+          } else if (
+            pkg.license &&
+            typeof (pkg.license as Record<string, unknown>).type === 'string'
+          ) {
+            pkgLicense = ((pkg.license as Record<string, unknown>).type as string).trim();
+          }
+        } catch {
+          evaluations.push({
+            rule: 'license.syntax',
+            category: 'license',
+            passed: false,
+            severity: 'error',
+            message: `Failed to parse package.json at ${pkgJsonPath}`,
+            details: { workspace: ws },
+          });
+          continue;
+        }
+      }
+
+      if (requireLicenseField) {
+        if (!pkgFound || !pkgLicense) {
+          evaluations.push({
+            rule: 'license.requireLicenseField',
+            category: 'license',
+            passed: false,
+            severity: 'error',
+            message: `Workspace "${ws}" lacks a required license declaration in package.json.`,
+            details: { workspace: ws, packageJsonExists: pkgFound },
+          });
+        } else {
+          evaluations.push({
+            rule: 'license.requireLicenseField',
+            category: 'license',
+            passed: true,
+            severity: 'error',
+            message: `Workspace "${ws}" declares license "${pkgLicense}".`,
+            details: { workspace: ws, license: pkgLicense },
+          });
+        }
+      }
+
+      if (pkgLicense) {
+        if (allowedLicenses && allowedLicenses.length > 0) {
+          const isAllowed = allowedLicenses.some(
+            (al) => al.toLowerCase() === pkgLicense!.toLowerCase()
+          );
+          if (!isAllowed) {
+            evaluations.push({
+              rule: 'license.allowedLicenses',
+              category: 'license',
+              passed: false,
+              severity: 'error',
+              message: `License "${pkgLicense}" in workspace "${ws}" is not in approved list [${allowedLicenses.join(', ')}].`,
+              details: { workspace: ws, license: pkgLicense, allowedLicenses },
+            });
+          } else {
+            evaluations.push({
+              rule: 'license.allowedLicenses',
+              category: 'license',
+              passed: true,
+              severity: 'error',
+              message: `License "${pkgLicense}" in workspace "${ws}" is compliant with allowed licenses.`,
+              details: { workspace: ws, license: pkgLicense },
+            });
+          }
+        }
+
+        if (disallowedLicenses && disallowedLicenses.length > 0) {
+          const isDisallowed = disallowedLicenses.some(
+            (dl) => dl.toLowerCase() === pkgLicense!.toLowerCase()
+          );
+          if (isDisallowed) {
+            evaluations.push({
+              rule: 'license.disallowedLicenses',
+              category: 'license',
+              passed: false,
+              severity: 'error',
+              message: `License "${pkgLicense}" in workspace "${ws}" is disallowed by policy.`,
+              details: { workspace: ws, license: pkgLicense, disallowedLicenses },
+            });
+          } else {
+            evaluations.push({
+              rule: 'license.disallowedLicenses',
+              category: 'license',
+              passed: true,
+              severity: 'error',
+              message: `License "${pkgLicense}" in workspace "${ws}" does not match any disallowed licenses.`,
+              details: { workspace: ws, license: pkgLicense },
+            });
+          }
+        }
+      }
+    }
+  }
+
   const rulesEvaluated = evaluations.length;
   const passedCount = evaluations.filter((e) => e.passed).length;
   const failedCount = evaluations.filter((e) => !e.passed && e.severity === 'error').length;

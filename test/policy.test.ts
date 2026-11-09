@@ -285,6 +285,68 @@ describe('Automated Evidence Policy Engine', () => {
       expect(result.passed).toBe(true);
       expect(result.evaluations.find((e) => e.rule === 'consensus.quorum')?.passed).toBe(true);
     });
+
+    it('enforces package license compliance rules in workspace', async () => {
+      const bundle = createMockBundle();
+      await saveBundle(bundle);
+
+      // 1. Without package.json, requireLicenseField fails
+      let policy: EvidencePolicy = {
+        license: {
+          requireLicenseField: true,
+        },
+      };
+      let result = evaluateEvidencePolicy({ bundle, policy });
+      expect(result.passed).toBe(false);
+      expect(result.evaluations.find((e) => e.rule === 'license.requireLicenseField')?.passed).toBe(false);
+
+      // 2. Add package.json with GPL-3.0
+      const pkgPath = path.join(tempWorkspace, 'package.json');
+      await fs.promises.writeFile(
+        pkgPath,
+        JSON.stringify({ name: 'my-app', version: '1.0.0', license: 'GPL-3.0' }, null, 2),
+        'utf8'
+      );
+
+      // 3. Test allowedLicenses requiring MIT or Apache-2.0 -> fails for GPL-3.0
+      policy = {
+        license: {
+          requireLicenseField: true,
+          allowedLicenses: ['MIT', 'Apache-2.0'],
+        },
+      };
+      result = evaluateEvidencePolicy({ bundle, policy });
+      expect(result.passed).toBe(false);
+      expect(result.evaluations.find((e) => e.rule === 'license.allowedLicenses')?.passed).toBe(false);
+
+      // 4. Test disallowedLicenses containing GPL-3.0 -> fails
+      policy = {
+        license: {
+          disallowedLicenses: ['GPL-3.0', 'AGPL-3.0'],
+        },
+      };
+      result = evaluateEvidencePolicy({ bundle, policy });
+      expect(result.passed).toBe(false);
+      expect(result.evaluations.find((e) => e.rule === 'license.disallowedLicenses')?.passed).toBe(false);
+
+      // 5. Update package.json to MIT -> satisfies allowedLicenses & disallowedLicenses
+      await fs.promises.writeFile(
+        pkgPath,
+        JSON.stringify({ name: 'my-app', version: '1.0.0', license: 'MIT' }, null, 2),
+        'utf8'
+      );
+
+      policy = {
+        license: {
+          requireLicenseField: true,
+          allowedLicenses: ['MIT', 'Apache-2.0'],
+          disallowedLicenses: ['GPL-3.0', 'AGPL-3.0'],
+        },
+      };
+      result = evaluateEvidencePolicy({ bundle, policy });
+      expect(result.passed).toBe(true);
+      expect(result.evaluations.filter((e) => e.category === 'license').every((e) => e.passed)).toBe(true);
+    });
   });
 
   describe('CLI Integration', () => {
