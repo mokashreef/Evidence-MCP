@@ -12,6 +12,7 @@ import { createPeerEndorsement, checkBundleQuorum } from './consensus.js';
 import { generateGitHubStepSummary, writeToGitHubStepSummary } from './github-summary.js';
 import { evaluateEvidencePolicy, loadPolicyFile } from './policy.js';
 import { dispatchAuditWebhook } from './webhook.js';
+import { registerTrustedAgent, revokeTrustedAgent, listTrustedAgents } from './registry.js';
 import {
   CommandEvidence,
   VerificationProof,
@@ -23,7 +24,7 @@ import {
 import path from 'node:path';
 import fs from 'node:fs';
 
-const VERSION = '0.9.0';
+const VERSION = '1.0.0';
 
 export function printHelp(): void {
   console.log(`
@@ -48,6 +49,9 @@ Usage:
   evidence-mcp summary <bundleId> [options]         Generate GitHub Actions step summary markdown
   evidence-mcp policy <bundleId> [options]          Evaluate bundle compliance against evidence.policy.json
   evidence-mcp webhook <bundleId> <url> [options]   Dispatch signed audit payload to a webhook URL
+  evidence-mcp registry add <agentId> <keyFile>     Register a trusted agent key in workspace
+  evidence-mcp registry list [options]              List all registered agents in workspace registry
+  evidence-mcp registry revoke <agentId> <reason>   Revoke a trusted agent key in registry
   evidence-mcp --help, -h                           Show this help message
   evidence-mcp --version, -v                        Show version number
 
@@ -998,6 +1002,156 @@ export async function runCli(args: string[]): Promise<number> {
       console.error(`Webhook error: ${(err as Error).message}`);
       return 1;
     }
+  }
+
+  // 15. registry <add|list|revoke> [args...]
+  if (firstArg === 'registry') {
+    const subAction = args[1];
+
+    if (!subAction || subAction === 'list') {
+      let workspace: string | undefined;
+      let filterStatus: 'active' | 'revoked' | 'suspended' | 'all' = 'all';
+
+      for (let i = 2; i < args.length; i++) {
+        if ((args[i] === '--workspace' || args[i] === '-w') && args[i + 1]) {
+          workspace = args[++i];
+        } else if (args[i] === '--status' && args[i + 1]) {
+          filterStatus = args[++i] as 'active' | 'revoked' | 'suspended' | 'all';
+        }
+      }
+
+      const targetWs = workspace ? path.resolve(workspace) : process.cwd();
+      try {
+        const agents = await listTrustedAgents(targetWs, filterStatus);
+
+        console.log(`\nTrusted Agent Key Registry (${targetWs})`);
+        console.log('='.repeat(80));
+        if (agents.length === 0) {
+          console.log(' No trusted agents registered in this workspace.');
+        } else {
+          for (const a of agents) {
+            const statusBadge = a.status === 'active' ? '[ACTIVE]' : a.status === 'revoked' ? '[REVOKED]' : '[SUSPENDED]';
+            console.log(` ${statusBadge.padEnd(12)} ${a.agentId.padEnd(25)} ${a.name} (${a.role})`);
+            console.log(`              Fingerprint: ${a.keyFingerprint}`);
+            if (a.status === 'revoked') {
+              console.log(`              Revoked:     ${a.revokedAt} - ${a.revocationReason}`);
+            }
+            if (a.expiresAt) {
+              console.log(`              Expires:     ${a.expiresAt}`);
+            }
+          }
+        }
+        console.log('='.repeat(80) + '\n');
+        return 0;
+      } catch (err: unknown) {
+        console.error(`Registry error: ${(err as Error).message}`);
+        return 1;
+      }
+    }
+
+    if (subAction === 'add') {
+      const agentId = args[2];
+      const keyFile = args[3];
+
+      if (!agentId || !keyFile || agentId.startsWith('-') || keyFile.startsWith('-')) {
+        console.error('Error: agentId and keyFile are required for "registry add".');
+        console.error('Usage: evidence-mcp registry add <agentId> <keyFile> [--name <name>] [--role <role>] [--workspace <path>]');
+        return 1;
+      }
+
+      let name = agentId;
+      let role = 'peer_reviewer';
+      let expiresAt: string | undefined;
+      let workspace: string | undefined;
+
+      for (let i = 4; i < args.length; i++) {
+        if (args[i] === '--name' && args[i + 1]) {
+          name = args[++i];
+        } else if (args[i] === '--role' && args[i + 1]) {
+          role = args[++i];
+        } else if (args[i] === '--expires' && args[i + 1]) {
+          expiresAt = args[++i];
+        } else if ((args[i] === '--workspace' || args[i] === '-w') && args[i + 1]) {
+          workspace = args[++i];
+        }
+      }
+
+      const targetWs = workspace ? path.resolve(workspace) : process.cwd();
+      try {
+        const pubKeyPem = await fs.promises.readFile(path.resolve(keyFile), 'utf8');
+        const agent = await registerTrustedAgent({
+          workspacePath: targetWs,
+          agentId,
+          name,
+          role,
+          publicKeyPem: pubKeyPem,
+          expiresAt,
+        });
+
+        console.log(`\nTrusted Agent Registered: ${agent.agentId}`);
+        console.log('='.repeat(80));
+        console.log(`Name:        ${agent.name}`);
+        console.log(`Role:        ${agent.role}`);
+        console.log(`Fingerprint: ${agent.keyFingerprint}`);
+        console.log(`Status:      ${agent.status}`);
+        console.log(`Timestamp:   ${agent.registeredAt}`);
+        console.log('='.repeat(80) + '\n');
+        return 0;
+      } catch (err: unknown) {
+        console.error(`Registry error: ${(err as Error).message}`);
+        return 1;
+      }
+    }
+
+    if (subAction === 'revoke') {
+      const agentId = args[2];
+      let reason: string | undefined;
+      let workspace: string | undefined;
+
+      const nonFlagArgs: string[] = [];
+      for (let i = 3; i < args.length; i++) {
+        if ((args[i] === '--workspace' || args[i] === '-w') && args[i + 1]) {
+          workspace = args[++i];
+        } else if (args[i] === '--reason' && args[i + 1]) {
+          reason = args[++i];
+        } else {
+          nonFlagArgs.push(args[i]);
+        }
+      }
+
+      if (!reason && nonFlagArgs.length > 0) {
+        reason = nonFlagArgs.join(' ');
+      }
+
+      if (!agentId || !reason) {
+        console.error('Error: agentId and reason are required for "registry revoke".');
+        console.error('Usage: evidence-mcp registry revoke <agentId> <reason> [--workspace <path>]');
+        return 1;
+      }
+
+      const targetWs = workspace ? path.resolve(workspace) : process.cwd();
+      try {
+        const agent = await revokeTrustedAgent({
+          workspacePath: targetWs,
+          agentId,
+          reason,
+        });
+
+        console.log(`\nTrusted Agent Revoked: ${agent.agentId}`);
+        console.log('='.repeat(80));
+        console.log(`Status:    ${agent.status}`);
+        console.log(`Revoked:   ${agent.revokedAt}`);
+        console.log(`Reason:    ${agent.revocationReason}`);
+        console.log('='.repeat(80) + '\n');
+        return 0;
+      } catch (err: unknown) {
+        console.error(`Registry error: ${(err as Error).message}`);
+        return 1;
+      }
+    }
+
+    console.error(`Unknown registry action: "${subAction}". Expected "add", "list", or "revoke".`);
+    return 1;
   }
 
   console.error(`Unknown command: "${firstArg}". Run "evidence-mcp --help" for available commands.`);

@@ -14,4 +14,5 @@ export * from './consensus.js';
 export * from './github-summary.js';
 export * from './policy.js';
 export * from './webhook.js';
+export * from './registry.js';
 export { runCli, printHelp } from './cli.js';

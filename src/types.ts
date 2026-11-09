@@ -513,3 +513,54 @@ export const DispatchWebhookAuditSchema = z.object({
   workspacePath: z.string().optional(),
 });
 export type DispatchWebhookAuditInput = z.infer<typeof DispatchWebhookAuditSchema>;
+
+// ==========================================
+// Agent Key Registry Types (v1.0.0)
+// ==========================================
+
+export type AgentRegistryStatus = 'active' | 'revoked' | 'suspended';
+
+export interface RegisteredAgent {
+  agentId: string;
+  name: string;
+  role: PeerEndorsementRole | string;
+  publicKeyPem: string;
+  keyFingerprint: string;
+  registeredAt: string;
+  expiresAt?: string;
+  status: AgentRegistryStatus;
+  revokedAt?: string;
+  revocationReason?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface AgentRegistry {
+  version: '1' | '1.0';
+  workspacePath: string;
+  updatedAt: string;
+  agents: Record<string, RegisteredAgent>;
+}
+
+export const RegisterTrustedAgentSchema = z.object({
+  agentId: z.string().min(1, 'agentId is required.'),
+  name: z.string().min(1, 'Agent display name is required.'),
+  role: z.string().min(1, 'Agent role is required.'),
+  publicKeyPem: z.string().min(1, 'PEM-encoded public key is required.'),
+  expiresAt: z.string().optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+  workspacePath: z.string().optional(),
+});
+export type RegisterTrustedAgentInput = z.infer<typeof RegisterTrustedAgentSchema>;
+
+export const RevokeTrustedAgentSchema = z.object({
+  agentId: z.string().min(1, 'agentId is required.'),
+  reason: z.string().min(1, 'Revocation reason is required.'),
+  workspacePath: z.string().optional(),
+});
+export type RevokeTrustedAgentInput = z.infer<typeof RevokeTrustedAgentSchema>;
+
+export const ListTrustedAgentsSchema = z.object({
+  workspacePath: z.string().optional(),
+  status: z.enum(['active', 'revoked', 'suspended', 'all']).default('all'),
+});
+export type ListTrustedAgentsInput = z.infer<typeof ListTrustedAgentsSchema>;

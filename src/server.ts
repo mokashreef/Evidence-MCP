@@ -29,12 +29,13 @@ import { createVerificationProof, verifyProofSignature } from './proof.js';
 import { createPeerEndorsement, checkBundleQuorum } from './consensus.js';
 import { evaluateEvidencePolicy, loadPolicyFile } from './policy.js';
 import { dispatchAuditWebhook } from './webhook.js';
+import { registerTrustedAgent, revokeTrustedAgent, listTrustedAgents } from './registry.js';
 import { EvidencePolicy } from './types.js';
 
 export function createEvidenceServer(): McpServer {
   const server = new McpServer({
     name: 'evidence-mcp',
-    version: '0.9.0',
+    version: '1.0.0',
   });
 
   // 1. create_evidence_bundle
@@ -1128,6 +1129,109 @@ export function createEvidenceServer(): McpServer {
         return {
           isError: true,
           content: [{ type: 'text', text: `Failed to dispatch webhook audit: ${message}` }],
+        };
+      }
+    }
+  );
+
+  // 18. register_trusted_agent
+  server.tool(
+    'register_trusted_agent',
+    'Registers or updates an authorized agent public key and role in the workspace trusted agent registry.',
+    {
+      agentId: z.string().min(1).describe('Unique agent identifier (e.g. "agent:security-auditor-1").'),
+      name: z.string().min(1).describe('Human-readable display name for the agent.'),
+      role: z.string().min(1).describe('Agent functional role (e.g. "security_auditor", "tester", "architect").'),
+      publicKeyPem: z.string().min(1).describe('PEM-encoded public key of the agent.'),
+      expiresAt: z.string().optional().describe('Optional ISO timestamp after which the agent key expires.'),
+      metadata: z.record(z.string(), z.unknown()).optional().describe('Optional metadata dictionary.'),
+      workspacePath: z.string().optional().describe('Optional workspace path root.'),
+    },
+    async ({ agentId, name, role, publicKeyPem, expiresAt, metadata, workspacePath }) => {
+      try {
+        const targetWs = workspacePath ? validateWorkspacePath(workspacePath) : process.cwd();
+        const agent = await registerTrustedAgent({
+          workspacePath: targetWs,
+          agentId,
+          name,
+          role,
+          publicKeyPem,
+          expiresAt,
+          metadata,
+        });
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  message: 'Agent successfully registered in trusted registry.',
+                  agentId: agent.agentId,
+                  name: agent.name,
+                  role: agent.role,
+                  keyFingerprint: agent.keyFingerprint,
+                  status: agent.status,
+                  registeredAt: agent.registeredAt,
+                  expiresAt: agent.expiresAt,
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `Failed to register trusted agent: ${message}` }],
+        };
+      }
+    }
+  );
+
+  // 19. revoke_trusted_agent
+  server.tool(
+    'revoke_trusted_agent',
+    'Revokes a trusted agent key in the workspace registry, invalidating future endorsements or attestations.',
+    {
+      agentId: z.string().min(1).describe('Unique agent identifier to revoke.'),
+      reason: z.string().min(1).describe('Audit reason for key revocation.'),
+      workspacePath: z.string().optional().describe('Optional workspace path root.'),
+    },
+    async ({ agentId, reason, workspacePath }) => {
+      try {
+        const targetWs = workspacePath ? validateWorkspacePath(workspacePath) : process.cwd();
+        const agent = await revokeTrustedAgent({
+          workspacePath: targetWs,
+          agentId,
+          reason,
+        });
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  message: 'Agent successfully revoked in trusted registry.',
+                  agentId: agent.agentId,
+                  status: agent.status,
+                  revokedAt: agent.revokedAt,
+                  revocationReason: agent.revocationReason,
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `Failed to revoke trusted agent: ${message}` }],
         };
       }
     }
