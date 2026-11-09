@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-11-09
+
+### Added
+- **Multi-Agent Consensus & Quorum Endorsement Protocol:**
+  - Multi-agent peer review protocol (`src/consensus.ts`) allowing independent reviewing agents (tester, security auditor, architect, peer reviewer) to inspect, endorse, or veto evidence bundles.
+  - New MCP tool `endorse_evidence_bundle` (Tool 14): appends an Ed25519-signed peer review endorsement with agent role, verdict (`approved`, `rejected`, `changes_requested`), and commentary to the bundle.
+  - New MCP tool `check_bundle_quorum` (Tool 15): validates quorum policies (minimum approved endorsements, required reviewer roles, unique signer enforcement, and rejection veto checks).
+  - New CLI commands:
+    - `evidence-mcp endorse <bundleId> --agent <id> --role <role> --verdict <verdict> [--comment <text>] [--key <file>]`
+    - `evidence-mcp quorum <bundleId> [--min <count>] [--roles <roles...>]`
+    - `evidence-mcp summary <bundleId> [--output <file>] [--github]`
+- **Official GitHub Actions Composite Action & Step Summary Integration:**
+  - Reusable GitHub Action definition (`action.yml`) enabling automated CI verification, quorum policy checks, and step summaries with zero configuration.
+  - Native GitHub Step Summary formatter (`src/github-summary.ts`) writing formatted audit tables, badge grids, AST breaking change alerts, and consensus tables to `$GITHUB_STEP_SUMMARY`.
+  - Comprehensive test suite in `test/consensus.test.ts` bringing total passing test suite to 140 tests across 13 test suites.
+
 ## [0.7.0] - 2026-11-08
 
 ### Added

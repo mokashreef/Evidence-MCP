@@ -100,9 +100,9 @@ All data is stored locally in human-readable JSON files inside the workspace roo
 
 ---
 
-## Tools Catalog (v0.7.0)
+## Tools Catalog (v0.8.0)
 
-Evidence MCP provides thirteen focused tools through the Model Context Protocol:
+Evidence MCP provides fifteen focused tools through the Model Context Protocol:
 
 | Tool | Purpose | Key Inputs | Output |
 |---|---|---|---|
@@ -119,6 +119,8 @@ Evidence MCP provides thirteen focused tools through the Model Context Protocol:
 | `export_evidence_report` | Generates a shareable Markdown, JSON, or interactive HTML report | `bundleId`, `format` (`markdown` \| `json` \| `html`) | Formatted report ready for PR or handoff |
 | `export_verification_proof` | Issues an Ed25519 cryptographically signed portable verification proof | `bundleId`, `privateKeyPem?`, `workspacePath?` | `proofId`, `verdict`, `bundleDigest`, `signature` |
 | `verify_replay_proof` | Verifies cryptographic signature and digest consistency of an exported proof | `proofId?`, `proofJson?`, `bundleId?` | `valid` (boolean), `verdict`, `bundleDigestMatches` |
+| `endorse_evidence_bundle` | Cryptographically signs a multi-agent peer review endorsement or veto | `bundleId`, `agentId`, `role`, `verdict`, `comments?`, `conditions?`, `privateKeyPem?` | `endorsementId`, `verdict`, `signature`, `totalEndorsements` |
+| `check_bundle_quorum` | Evaluates multi-agent peer endorsements against a strict quorum policy | `bundleId`, `policy` (`minEndorsements`, `requiredRoles`, `disallowRejections`, `requireUniqueSigners`) | `satisfied` (boolean), `approvedCount`, `rejectedCount`, `missingRoles`, `failures` |
 
 ---
 
@@ -202,12 +204,56 @@ node dist/cli.js replay bundle_9a41f0bc
 node dist/cli.js replay bundle_9a41f0bc --re-execute
 ```
 
+### 10. Multi-Agent Peer Endorsement (Consensus Protocol)
+```bash
+# Endorse a bundle as an independent tester agent with Ed25519 signature:
+node dist/cli.js endorse bundle_9a41f0bc tester approved --agent agent-tester --comments "All 42 integration tests passed on Node 22"
+
+# Endorse with conditional remarks or submit a rejection veto:
+node dist/cli.js endorse bundle_9a41f0bc security_auditor rejected --agent sec-guard --comments "Unsanitized path parameter in upload handler"
+```
+
+### 11. Multi-Agent Quorum Evaluation
+```bash
+# Evaluate consensus with minimum endorsement count and required roles:
+node dist/cli.js quorum bundle_9a41f0bc --min 2 --roles tester,security_auditor
+
+# Strict CI evaluation with rejection veto enforcement:
+node dist/cli.js quorum bundle_9a41f0bc --min 3 --disallow-rejections --unique-signers
+# Exits with 0 if quorum is satisfied; exits with 1 if quorum failed
+```
+
+### 12. GitHub Actions Step Summary Generation
+```bash
+# Print formatted GitHub Step Summary Markdown to stdout:
+node dist/cli.js summary bundle_9a41f0bc
+
+# Automatically append to $GITHUB_STEP_SUMMARY in CI workflows:
+node dist/cli.js summary bundle_9a41f0bc --github-summary
+```
+
 ### CI/CD Pipeline Integration (GitHub Actions)
-Add a verification step to your pull request workflow to verify incoming agent claims:
+
+Evidence MCP provides an official composite action (`action.yml`) for seamless GitHub Actions CI/CD pipeline integration:
+
+```yaml
+- name: Verify Agent Evidence & Multi-Agent Quorum
+  uses: mokashreef/Evidence-MCP@v0.8.0
+  with:
+    bundle-id: ${{ env.BUNDLE_ID }}
+    min-endorsements: '2'
+    required-roles: 'tester,security_auditor'
+    disallow-rejections: 'true'
+    write-summary: 'true'
+```
+
+Or manually via CLI commands:
 ```yaml
 - name: Verify Agent Evidence Bundle
   run: |
     node dist/cli.js verify ${{ env.BUNDLE_ID }}
+    node dist/cli.js quorum ${{ env.BUNDLE_ID }} --min 2 --roles tester,security_auditor
+    node dist/cli.js summary ${{ env.BUNDLE_ID }} --github-summary
 ```
 
 ---
@@ -329,6 +375,32 @@ Here is how an agent interacts with Evidence MCP during a coding assignment:
 ```
 *Returns a structured GitHub Flavored Markdown report ready to paste directly into a PR description or issue.*
 
+### 9. Multi-Agent Peer Review & Quorum Endorsement
+```json
+// Call: endorse_evidence_bundle
+{
+  "bundleId": "bundle_9a41f0bc",
+  "agentId": "agent-security-guard",
+  "role": "security_auditor",
+  "verdict": "approved",
+  "comments": "No CVE vulnerabilities or path traversal risks detected."
+}
+```
+
+```json
+// Call: check_bundle_quorum
+{
+  "bundleId": "bundle_9a41f0bc",
+  "policy": {
+    "minEndorsements": 2,
+    "requiredRoles": ["tester", "security_auditor"],
+    "disallowRejections": true,
+    "requireUniqueSigners": true
+  }
+}
+```
+*Returns:* `{ "satisfied": true, "verdict": "approved", "approvedCount": 2, "rejectedCount": 0, "missingRoles": [], "failures": [] }`
+
 ---
 
 ## Security & Privacy Model
@@ -395,9 +467,15 @@ npm run build
 
 ---
 
-## Scope & Boundaries (v0.7.0)
+## Scope & Boundaries (v0.8.0)
 
-### Strictly In Scope for v0.7.0
+### Strictly In Scope for v0.8.0
+- Multi-agent consensus protocol with Ed25519 peer endorsements (`endorse_evidence_bundle` tool and `evidence-mcp endorse` CLI).
+- Peer endorsement roles (`tester`, `security_auditor`, `architect`, `reviewer`, `peer_agent`) and verdicts (`approved`, `rejected`, `conditional`).
+- Flexible quorum policy engine (`check_bundle_quorum` tool and `evidence-mcp quorum` CLI) supporting threshold counting, mandatory roles, rejection vetoes, and unique signer checks.
+- Native GitHub Actions composite action (`action.yml`) with zero external runtime dependencies.
+- GitHub Step Summary Markdown generation (`generateGitHubStepSummary` and `evidence-mcp summary` CLI) displaying visual badge grids, AST breaking change alerts, and endorsement audit trails.
+- Offline-safe HTML and Markdown report extensions rendering peer review verdicts, roles, signatures, and timestamps.
 - Cryptographic verification proofs (`export_verification_proof` tool and `evidence-mcp proof create` CLI).
 - Proof verification and digest validation (`verify_replay_proof` tool and `evidence-mcp proof verify` CLI).
 - Sequential evidence replay and reproducibility auditing (`replayEvidenceBundle` and `evidence-mcp replay`).
@@ -419,13 +497,13 @@ npm run build
 - Deterministic canonical payload serialization (`getCanonicalPayload`) for tamper resistance.
 - Cryptographic signature re-verification in `verify_evidence_bundle` and CLI `verify`.
 - Local file persistence under `.evidence-mcp/bundles/`, `.evidence-mcp/proofs/`, and key pairs under `.evidence-mcp/keys/`.
-- Standalone CLI interface (`verify`, `list`, `report`, `sign`, `exec`, `workspace`, `ast`, `proof`, `replay`) with CI exit codes.
-- Interactive, responsive, offline-safe HTML report generation with multi-workspace tables, AST symbol catalogs, and badges.
+- Standalone CLI interface (`verify`, `list`, `report`, `sign`, `exec`, `workspace`, `ast`, `proof`, `replay`, `endorse`, `quorum`, `summary`) with CI exit codes.
+- Interactive, responsive, offline-safe HTML report generation with multi-workspace tables, AST symbol catalogs, peer endorsements, and badges.
 - Mandatory evidence-linked assertions.
 - Live verification of file hashes, Git status, AST symbols, and cryptographic signatures.
 - Markdown, JSON, and HTML report exporting.
 
-### Out of Scope for v0.7.0
+### Out of Scope for v0.8.0
 - **Direct Arbitrary Shell Command Execution:** Raw shell strings (e.g. `bash -c "..."`) without security boundaries are strictly rejected.
 - **Remote Publishing / Cloud Syncing:** Evidence bundles are local to the workspace. There is no auto-pushing to remote cloud APIs or external issue trackers.
 
@@ -438,7 +516,8 @@ npm run build
 - **v0.5 (Completed):** Multi-workspace support for cross-repository monorepo changes.
 - **v0.6 (Completed):** Diff-level syntax tree (AST) evidence capturing with breaking change detection.
 - **v0.7 (Completed):** Signed reproducible evidence replay & bundle verification proofs.
-- **v0.8:** Multi-agent cross-verification consensus protocol.
+- **v0.8 (Completed):** Multi-agent cross-verification consensus protocol & GitHub Step Summary composite action.
+- **v0.9:** Automated evidence policy engine, webhook notifications & distributed agent attestation registry.
 
 ---
 

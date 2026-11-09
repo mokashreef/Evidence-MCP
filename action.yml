@@ -1,0 +1,60 @@
+name: 'Evidence MCP Verification Action'
+description: 'Verifies evidence bundles, validates multi-agent consensus quorum, and posts rich step summaries in GitHub Actions.'
+author: 'mohammad abu kashreef'
+
+inputs:
+  bundle-id:
+    description: 'The ID of the evidence bundle to verify (e.g. bundle_12345678).'
+    required: true
+  workspace-path:
+    description: 'Path to workspace directory (defaults to github.workspace).'
+    required: false
+    default: '.'
+  require-quorum:
+    description: 'Whether to require multi-agent quorum consensus to pass.'
+    required: false
+    default: 'false'
+  min-endorsements:
+    description: 'Minimum required peer endorsements for quorum check.'
+    required: false
+    default: '1'
+  required-roles:
+    description: 'Comma-separated list of required reviewer roles (e.g. "tester,security_auditor").'
+    required: false
+    default: ''
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 20
+
+    - name: Install dependencies
+      shell: bash
+      run: npm ci
+
+    - name: Build Evidence MCP
+      shell: bash
+      run: npm run build
+
+    - name: Verify Evidence Bundle
+      shell: bash
+      run: |
+        node dist/cli.js verify "${{ inputs.bundle-id }}" --workspace "${{ inputs.workspace-path }}"
+
+    - name: Check Quorum (if enabled)
+      if: ${{ inputs.require-quorum == 'true' }}
+      shell: bash
+      run: |
+        ROLES_ARG=""
+        if [ -n "${{ inputs.required-roles }}" ]; then
+          ROLES_ARG="--roles ${{ inputs.required-roles }}"
+        fi
+        node dist/cli.js quorum "${{ inputs.bundle-id }}" --min "${{ inputs.min-endorsements }}" $ROLES_ARG --workspace "${{ inputs.workspace-path }}"
+
+    - name: Generate GitHub Step Summary
+      shell: bash
+      run: |
+        node dist/cli.js summary "${{ inputs.bundle-id }}" --github --workspace "${{ inputs.workspace-path }}"
