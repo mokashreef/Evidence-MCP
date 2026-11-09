@@ -27,11 +27,14 @@ import { executeSandboxedCommand } from './runner.js';
 import { captureFileAstEvidence } from './ast.js';
 import { createVerificationProof, verifyProofSignature } from './proof.js';
 import { createPeerEndorsement, checkBundleQuorum } from './consensus.js';
+import { evaluateEvidencePolicy, loadPolicyFile } from './policy.js';
+import { dispatchAuditWebhook } from './webhook.js';
+import { EvidencePolicy } from './types.js';
 
 export function createEvidenceServer(): McpServer {
   const server = new McpServer({
     name: 'evidence-mcp',
-    version: '0.8.0',
+    version: '0.9.0',
   });
 
   // 1. create_evidence_bundle
@@ -991,6 +994,140 @@ export function createEvidenceServer(): McpServer {
         return {
           isError: true,
           content: [{ type: 'text', text: `Failed to check bundle quorum: ${message}` }],
+        };
+      }
+    }
+  );
+
+  // 16. evaluate_evidence_policy
+  server.tool(
+    'evaluate_evidence_policy',
+    'Evaluates an evidence bundle against declarative compliance rules defined in evidence.policy.json or an inline policy.',
+    {
+      bundleId: z.string().min(1).describe('The unique identifier of the evidence bundle to evaluate.'),
+      policyPath: z.string().optional().describe('Path to evidence.policy.json file (defaults to workspace discovery).'),
+      policy: z.record(z.string(), z.unknown()).optional().describe('Inline policy definition overriding file on disk.'),
+      strict: z.boolean().default(false).describe('Enforce strict compliance (fail if any warnings exist).'),
+      workspacePath: z.string().optional().describe('Optional workspace path hint to locate the bundle.'),
+    },
+    async ({ bundleId, policyPath, policy, strict, workspacePath }) => {
+      try {
+        const bundle = await loadBundle(bundleId, workspacePath);
+
+        let activePolicy: EvidencePolicy;
+        let source = 'inline';
+
+        if (policy) {
+          activePolicy = policy as unknown as EvidencePolicy;
+        } else {
+          const loaded = await loadPolicyFile(policyPath, bundle.workspacePath);
+          if (!loaded) {
+            throw new Error(
+              `No policy found. Provide an inline policy or create "evidence.policy.json" in workspace root.`
+            );
+          }
+          activePolicy = loaded.policy;
+          source = loaded.sourcePath;
+        }
+
+        let verificationResult;
+        try {
+          verificationResult = await verifyEvidenceBundle(bundle);
+        } catch {
+          // Proceed even if verification throws
+        }
+
+        const evaluation = evaluateEvidencePolicy({
+          bundle,
+          policy: activePolicy,
+          strict,
+          verificationResult,
+        });
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  bundleId: evaluation.bundleId,
+                  passed: evaluation.passed,
+                  policySource: source,
+                  summary: evaluation.policySummary,
+                  rulesEvaluated: evaluation.rulesEvaluated,
+                  passedCount: evaluation.passedCount,
+                  failedCount: evaluation.failedCount,
+                  warningCount: evaluation.warningCount,
+                  evaluations: evaluation.evaluations,
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `Failed to evaluate evidence policy: ${message}` }],
+        };
+      }
+    }
+  );
+
+  // 17. dispatch_webhook_audit
+  server.tool(
+    'dispatch_webhook_audit',
+    'Dispatches a cryptographically signed HMAC-SHA256 audit payload to a remote webhook endpoint.',
+    {
+      bundleId: z.string().min(1).describe('The unique identifier of the evidence bundle to dispatch.'),
+      webhookUrl: z.string().url().describe('Target HTTP or HTTPS webhook URL.'),
+      secretToken: z.string().optional().describe('Optional secret key for HMAC-SHA256 signature (X-Evidence-Signature).'),
+      includeProof: z.boolean().default(false).describe('Generate and attach portable Ed25519 verification proof.'),
+      headers: z.record(z.string(), z.string()).optional().describe('Optional additional HTTP request headers.'),
+      timeoutMs: z.number().int().min(1000).max(60000).default(10000).describe('Network timeout in milliseconds.'),
+      workspacePath: z.string().optional().describe('Optional workspace path hint to locate the bundle.'),
+    },
+    async ({ bundleId, webhookUrl, secretToken, includeProof, headers, timeoutMs, workspacePath }) => {
+      try {
+        const result = await dispatchAuditWebhook({
+          bundleId,
+          webhookUrl,
+          secretToken,
+          includeProof,
+          headers,
+          timeoutMs,
+          workspacePath,
+        });
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  bundleId: result.bundleId,
+                  delivered: result.delivered,
+                  webhookUrl: result.webhookUrl,
+                  statusCode: result.statusCode,
+                  statusText: result.statusText,
+                  durationMs: result.durationMs,
+                  signatureHeader: result.signatureHeader,
+                  responsePreview: result.responseBody,
+                  error: result.error,
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `Failed to dispatch webhook audit: ${message}` }],
         };
       }
     }

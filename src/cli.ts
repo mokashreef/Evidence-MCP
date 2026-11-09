@@ -10,17 +10,20 @@ import { captureFileAstEvidence } from './ast.js';
 import { createVerificationProof, verifyProofSignature, replayEvidenceBundle } from './proof.js';
 import { createPeerEndorsement, checkBundleQuorum } from './consensus.js';
 import { generateGitHubStepSummary, writeToGitHubStepSummary } from './github-summary.js';
+import { evaluateEvidencePolicy, loadPolicyFile } from './policy.js';
+import { dispatchAuditWebhook } from './webhook.js';
 import {
   CommandEvidence,
   VerificationProof,
   EvidenceBundle,
+  EvidencePolicy,
   PeerEndorsementRole,
   PeerEndorsementVerdict,
 } from './types.js';
 import path from 'node:path';
 import fs from 'node:fs';
 
-const VERSION = '0.8.0';
+const VERSION = '0.9.0';
 
 export function printHelp(): void {
   console.log(`
@@ -43,6 +46,8 @@ Usage:
   evidence-mcp endorse <bundleId> [options]         Append a signed peer review endorsement to a bundle
   evidence-mcp quorum <bundleId> [options]          Check multi-agent consensus quorum compliance
   evidence-mcp summary <bundleId> [options]         Generate GitHub Actions step summary markdown
+  evidence-mcp policy <bundleId> [options]          Evaluate bundle compliance against evidence.policy.json
+  evidence-mcp webhook <bundleId> <url> [options]   Dispatch signed audit payload to a webhook URL
   evidence-mcp --help, -h                           Show this help message
   evidence-mcp --version, -v                        Show version number
 
@@ -61,6 +66,10 @@ Options:
   --comment <text>         Review commentary text
   --min <count>            Minimum approved endorsements required for quorum (default: 1)
   --roles <roles...>       Comma-separated list of required endorsement roles
+  --policy, -p <file>      Path to evidence.policy.json file
+  --strict                 Enforce strict policy compliance (fail on warnings)
+  --secret, -s <token>     Secret key for HMAC-SHA256 webhook signature
+  --proof                  Include signed verification proof in webhook audit payload
   --github                 Automatically append markdown to GITHUB_STEP_SUMMARY
 `);
 }
@@ -845,6 +854,148 @@ export async function runCli(args: string[]): Promise<number> {
       return 0;
     } catch (err: unknown) {
       console.error(`Summary error: ${(err as Error).message}`);
+      return 1;
+    }
+  }
+
+  // 13. policy <bundleId> [options]
+  if (firstArg === 'policy') {
+    const bundleId = args[1];
+    if (!bundleId || bundleId.startsWith('-')) {
+      console.error('Error: bundleId is required for "policy" command.');
+      console.error('Usage: evidence-mcp policy <bundleId> [--policy <file>] [--strict] [--workspace <path>]');
+      return 1;
+    }
+
+    let policyPath: string | undefined;
+    let strict = false;
+    let workspace: string | undefined;
+    let outputFile: string | undefined;
+
+    for (let i = 2; i < args.length; i++) {
+      if ((args[i] === '--policy' || args[i] === '-p') && args[i + 1]) {
+        policyPath = args[++i];
+      } else if (args[i] === '--strict') {
+        strict = true;
+      } else if ((args[i] === '--workspace' || args[i] === '-w') && args[i + 1]) {
+        workspace = args[++i];
+      } else if ((args[i] === '--output' || args[i] === '-o') && args[i + 1]) {
+        outputFile = args[++i];
+      }
+    }
+
+    try {
+      const bundle = await loadBundle(bundleId, workspace);
+      const loaded = await loadPolicyFile(policyPath, bundle.workspacePath);
+      if (!loaded) {
+        console.error(`Error: Policy file not found. Create "evidence.policy.json" in workspace root or specify with --policy.`);
+        return 1;
+      }
+
+      let verificationResult;
+      try {
+        verificationResult = await verifyEvidenceBundle(bundle);
+      } catch {
+        // Proceed even if verification fails
+      }
+
+      const evaluation = evaluateEvidencePolicy({
+        bundle,
+        policy: loaded.policy,
+        strict,
+        verificationResult,
+      });
+
+      console.log(`\nPolicy Compliance Evaluation: ${bundle.id}`);
+      console.log(`Policy Source: ${loaded.sourcePath}`);
+      console.log(`Status:        ${evaluation.passed ? 'PASSED (COMPLIANT)' : 'FAILED (NON-COMPLIANT)'}`);
+      console.log('='.repeat(80));
+
+      for (const evalItem of evaluation.evaluations) {
+        const statusBadge = evalItem.passed
+          ? '[PASS]'
+          : evalItem.severity === 'error'
+          ? '[FAIL]'
+          : '[WARN]';
+        console.log(` ${statusBadge.padEnd(8)} ${evalItem.rule.padEnd(35)} ${evalItem.message}`);
+      }
+
+      console.log('='.repeat(80));
+      console.log(`Summary: ${evaluation.policySummary}\n`);
+
+      if (outputFile) {
+        const outPath = path.resolve(outputFile);
+        await fs.promises.mkdir(path.dirname(outPath), { recursive: true });
+        await fs.promises.writeFile(outPath, JSON.stringify(evaluation, null, 2), 'utf8');
+        console.log(`Evaluation results written to: ${outPath}`);
+      }
+
+      return evaluation.passed ? 0 : 1;
+    } catch (err: unknown) {
+      console.error(`Policy evaluation error: ${(err as Error).message}`);
+      return 1;
+    }
+  }
+
+  // 14. webhook <bundleId> <url> [options]
+  if (firstArg === 'webhook') {
+    const bundleId = args[1];
+    const webhookUrl = args[2];
+    if (!bundleId || !webhookUrl || bundleId.startsWith('-') || webhookUrl.startsWith('-')) {
+      console.error('Error: bundleId and webhookUrl are required for "webhook" command.');
+      console.error('Usage: evidence-mcp webhook <bundleId> <url> [--secret <token>] [--proof] [--timeout <ms>]');
+      return 1;
+    }
+
+    let secretToken: string | undefined;
+    let includeProof = false;
+    let timeoutMs = 10000;
+    let workspace: string | undefined;
+
+    for (let i = 3; i < args.length; i++) {
+      if ((args[i] === '--secret' || args[i] === '-s') && args[i + 1]) {
+        secretToken = args[++i];
+      } else if (args[i] === '--proof') {
+        includeProof = true;
+      } else if (args[i] === '--timeout' && args[i + 1]) {
+        timeoutMs = parseInt(args[++i], 10) || 10000;
+      } else if ((args[i] === '--workspace' || args[i] === '-w') && args[i + 1]) {
+        workspace = args[++i];
+      }
+    }
+
+    try {
+      const result = await dispatchAuditWebhook({
+        bundleId,
+        webhookUrl,
+        secretToken,
+        includeProof,
+        timeoutMs,
+        workspacePath: workspace,
+      });
+
+      console.log(`\nWebhook Audit Dispatch: ${bundleId}`);
+      console.log('='.repeat(80));
+      console.log(`Target URL:    ${result.webhookUrl}`);
+      console.log(`Delivery:      ${result.delivered ? 'DELIVERED (SUCCESS)' : 'FAILED'}`);
+      if (result.statusCode) {
+        console.log(`HTTP Status:   ${result.statusCode} ${result.statusText || ''}`);
+      }
+      console.log(`Duration:      ${result.durationMs}ms`);
+      if (result.signatureHeader) {
+        console.log(`Signature:     ${result.signatureHeader}`);
+      }
+      if (result.error) {
+        console.log(`Error:         ${result.error}`);
+      }
+      if (result.responseBody) {
+        console.log(`Response:      ${result.responseBody.trim()}`);
+      }
+      console.log('='.repeat(80) + '\n');
+
+      return result.delivered ? 0 : 1;
+    } catch (err: unknown) {
+      console.error(`Webhook error: ${(err as Error).message}`);
       return 1;
     }
   }

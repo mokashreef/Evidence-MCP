@@ -12,4 +12,6 @@ export * from './ast.js';
 export * from './proof.js';
 export * from './consensus.js';
 export * from './github-summary.js';
+export * from './policy.js';
+export * from './webhook.js';
 export { runCli, printHelp } from './cli.js';

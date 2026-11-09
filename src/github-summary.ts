@@ -183,3 +183,4 @@ export async function writeToGitHubStepSummary(markdown: string): Promise<boolea
   await fs.promises.appendFile(stepSummaryPath, `${markdown}\n\n`, 'utf8');
   return true;
 }
+

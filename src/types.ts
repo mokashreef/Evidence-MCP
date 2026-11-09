@@ -381,3 +381,135 @@ export const CheckBundleQuorumSchema = z.object({
   workspacePath: z.string().optional(),
 });
 export type CheckBundleQuorumInput = z.infer<typeof CheckBundleQuorumSchema>;
+
+// ==========================================
+// Automated Evidence Policy Engine Types
+// ==========================================
+
+export interface EvidencePolicyGitRules {
+  requireCleanWorkingTree?: boolean;
+  allowedBranches?: string[];
+  disallowDetachedHead?: boolean;
+}
+
+export interface EvidencePolicyFileRules {
+  maxSnapshots?: number;
+  requiredPatterns?: string[];
+  disallowedPatterns?: string[];
+}
+
+export interface EvidencePolicyCommandRules {
+  requireServerExecutedCommands?: boolean;
+  minServerExecutedCommands?: number;
+  disallowNonZeroExitCodes?: boolean;
+  requiredCommandPatterns?: string[];
+}
+
+export interface EvidencePolicyAstRules {
+  requireAstEvidence?: boolean;
+  disallowBreakingChanges?: boolean;
+}
+
+export interface EvidencePolicyAssertionRules {
+  minAssertions?: number;
+  disallowUnverifiable?: boolean;
+}
+
+export interface EvidencePolicyAttestationRules {
+  requireSignature?: boolean;
+  allowedFingerprints?: string[];
+}
+
+export interface EvidencePolicy {
+  version?: '1' | '1.0';
+  description?: string;
+  git?: EvidencePolicyGitRules;
+  files?: EvidencePolicyFileRules;
+  commands?: EvidencePolicyCommandRules;
+  ast?: EvidencePolicyAstRules;
+  assertions?: EvidencePolicyAssertionRules;
+  attestation?: EvidencePolicyAttestationRules;
+  consensus?: QuorumPolicy;
+}
+
+export interface PolicyRuleEvaluation {
+  rule: string;
+  category: 'git' | 'files' | 'commands' | 'ast' | 'assertions' | 'attestation' | 'consensus';
+  passed: boolean;
+  message: string;
+  severity: 'error' | 'warning';
+  details?: Record<string, unknown>;
+}
+
+export interface PolicyEvaluationResult {
+  bundleId: string;
+  passed: boolean;
+  evaluatedAt: string;
+  policySummary: string;
+  rulesEvaluated: number;
+  passedCount: number;
+  failedCount: number;
+  warningCount: number;
+  evaluations: PolicyRuleEvaluation[];
+}
+
+export const EvaluateEvidencePolicySchema = z.object({
+  bundleId: z.string().min(1, 'bundleId is required.'),
+  policyPath: z.string().optional(),
+  policy: z.record(z.string(), z.unknown()).optional(),
+  workspacePath: z.string().optional(),
+  strict: z.boolean().default(false),
+});
+export type EvaluateEvidencePolicyInput = z.infer<typeof EvaluateEvidencePolicySchema>;
+
+// ==========================================
+// Webhook Audit & Notification Types
+// ==========================================
+
+export interface WebhookDispatchOptions {
+  bundleId: string;
+  webhookUrl: string;
+  secretToken?: string;
+  includeProof?: boolean;
+  includeReport?: boolean;
+  headers?: Record<string, string>;
+  timeoutMs?: number;
+  workspacePath?: string;
+}
+
+export interface WebhookAuditPayload {
+  event: 'evidence_bundle.audit';
+  bundleId: string;
+  task: string;
+  status: string;
+  bundleDigest: string;
+  createdAt: string;
+  timestamp: string;
+  bundle: EvidenceBundle;
+  proof?: VerificationProof;
+  policyResult?: PolicyEvaluationResult;
+}
+
+export interface WebhookDispatchResult {
+  bundleId: string;
+  delivered: boolean;
+  webhookUrl: string;
+  statusCode?: number;
+  statusText?: string;
+  responseBody?: string;
+  signatureHeader?: string;
+  durationMs: number;
+  timestamp: string;
+  error?: string;
+}
+
+export const DispatchWebhookAuditSchema = z.object({
+  bundleId: z.string().min(1, 'bundleId is required.'),
+  webhookUrl: z.string().url('Must be a valid HTTP or HTTPS URL.'),
+  secretToken: z.string().optional(),
+  includeProof: z.boolean().default(false),
+  headers: z.record(z.string(), z.string()).optional(),
+  timeoutMs: z.number().int().min(1000).max(60000).default(10000),
+  workspacePath: z.string().optional(),
+});
+export type DispatchWebhookAuditInput = z.infer<typeof DispatchWebhookAuditSchema>;
