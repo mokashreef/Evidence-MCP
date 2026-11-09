@@ -168,6 +168,10 @@ export function parseSourceSymbols(sourceCode: string, filePath: string): AstSym
     return parseTsJsSymbols(sourceCode);
   }
 
+  if (lang === 'python') {
+    return parsePythonSymbols(sourceCode);
+  }
+
   return [];
 }
 
@@ -376,6 +380,89 @@ function parseTsJsSymbols(sourceCode: string): AstSymbol[] {
           endLine: lineNum,
         });
       }
+    }
+  }
+
+  return symbols;
+}
+
+function parsePythonSymbols(sourceCode: string): AstSymbol[] {
+  const symbols: AstSymbol[] = [];
+  const lines = sourceCode.split('\n');
+
+  const classRegex = /^(?:class\s+)([A-Za-z0-9_]+)(?:\((.*?)\))?\s*:/;
+  const defRegex = /^(\s*)(async\s+)?def\s+([A-Za-z0-9_]+)\s*\((.*?)\)(?:\s*->\s*([^:]+))?\s*:/;
+
+  let currentClassName = '';
+  let classIndentLevel = -1;
+
+  for (let i = 0; i < lines.length; i++) {
+    const rawLine = lines[i];
+    const trimmed = rawLine.trim();
+    const lineNum = i + 1;
+
+    if (!trimmed || trimmed.startsWith('#')) {
+      continue;
+    }
+
+    const currentIndent = rawLine.search(/\S/);
+
+    // If inside class and indent drops to <= class indent, exit class
+    if (classIndentLevel !== -1 && currentIndent <= classIndentLevel && !trimmed.startsWith('@')) {
+      currentClassName = '';
+      classIndentLevel = -1;
+    }
+
+    // Check Class declaration
+    const classMatch = rawLine.trim().match(classRegex);
+    if (classMatch && currentIndent === 0) {
+      const name = classMatch[1];
+      const bases = classMatch[2]?.trim();
+      const isExported = !name.startsWith('_');
+      currentClassName = name;
+      classIndentLevel = currentIndent;
+
+      symbols.push({
+        name,
+        kind: 'class',
+        isExported,
+        signature: `class ${name}${bases ? `(${bases})` : ''}:`,
+        startLine: lineNum,
+        endLine: lineNum,
+      });
+      continue;
+    }
+
+    // Check Function or Method declaration
+    const defMatch = rawLine.match(defRegex);
+    if (defMatch) {
+      const indentStr = defMatch[1] || '';
+      const isAsync = Boolean(defMatch[2]);
+      const name = defMatch[3];
+      const rawParams = defMatch[4] || '';
+      const returnType = defMatch[5]?.trim();
+      const isInsideClass = currentClassName !== '' && indentStr.length > classIndentLevel;
+
+      const isExported = !name.startsWith('_') || name === '__init__';
+      const kind: AstSymbolKind = isInsideClass ? 'method' : 'function';
+      const fullName = isInsideClass ? `${currentClassName}.${name}` : name;
+      const params = parseParameters(rawParams);
+
+      const asyncPrefix = isAsync ? 'async ' : '';
+      const returnSuffix = returnType ? ` -> ${returnType}` : '';
+      const signature = `${asyncPrefix}def ${name}(${params.map((p) => `${p.name}${p.type ? `: ${p.type}` : ''}${p.defaultValue ? `=${p.defaultValue}` : ''}`).join(', ')})${returnSuffix}:`;
+
+      symbols.push({
+        name: fullName,
+        kind,
+        isExported,
+        isAsync,
+        parameters: params,
+        returnType,
+        signature,
+        startLine: lineNum,
+        endLine: lineNum,
+      });
     }
   }
 

@@ -127,6 +127,49 @@ describe('AST & Semantic Diff Evidence Engine', () => {
       expect(internal.isExported).toBe(false);
     });
 
+    it('extracts Python classes, methods, functions, and async def with parameters', () => {
+      const pythonSource = `
+class DataPipeline(BasePipeline):
+    def __init__(self, name: str, batch_size: int = 100):
+        self.name = name
+
+    def process(self, item: dict) -> bool:
+        return True
+
+    def _internal_clean(self):
+        pass
+
+async def fetch_remote_metrics(endpoint: str, timeout: int = 30) -> list:
+    pass
+
+def _private_worker():
+    pass
+      `;
+
+      const symbols = parseSourceSymbols(pythonSource, 'pipeline.py');
+      const names = symbols.map((s) => s.name);
+
+      expect(names).toContain('DataPipeline');
+      expect(names).toContain('DataPipeline.__init__');
+      expect(names).toContain('DataPipeline.process');
+      expect(names).toContain('DataPipeline._internal_clean');
+      expect(names).toContain('fetch_remote_metrics');
+      expect(names).toContain('_private_worker');
+
+      const proc = symbols.find((s) => s.name === 'DataPipeline.process');
+      expect(proc?.kind).toBe('method');
+      expect(proc?.isExported).toBe(true);
+      expect(proc?.returnType).toBe('bool');
+
+      const fetchMetrics = symbols.find((s) => s.name === 'fetch_remote_metrics');
+      expect(fetchMetrics?.kind).toBe('function');
+      expect(fetchMetrics?.isAsync).toBe(true);
+      expect(fetchMetrics?.isExported).toBe(true);
+      expect(fetchMetrics?.parameters?.length).toBe(2);
+      expect(fetchMetrics?.parameters?.[1].name).toBe('timeout');
+      expect(fetchMetrics?.parameters?.[1].defaultValue).toBe('30');
+    });
+
     it('extracts top-level keys from JSON files', () => {
       const jsonSource = JSON.stringify({
         name: 'evidence-mcp',
