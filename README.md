@@ -100,9 +100,9 @@ All data is stored locally in human-readable JSON files inside the workspace roo
 
 ---
 
-## Tools Catalog (v0.8.0)
+## Tools Catalog (v0.9.0)
 
-Evidence MCP provides fifteen focused tools through the Model Context Protocol:
+Evidence MCP provides seventeen focused tools through the Model Context Protocol:
 
 | Tool | Purpose | Key Inputs | Output |
 |---|---|---|---|
@@ -121,6 +121,8 @@ Evidence MCP provides fifteen focused tools through the Model Context Protocol:
 | `verify_replay_proof` | Verifies cryptographic signature and digest consistency of an exported proof | `proofId?`, `proofJson?`, `bundleId?` | `valid` (boolean), `verdict`, `bundleDigestMatches` |
 | `endorse_evidence_bundle` | Cryptographically signs a multi-agent peer review endorsement or veto | `bundleId`, `agentId`, `role`, `verdict`, `comments?`, `conditions?`, `privateKeyPem?` | `endorsementId`, `verdict`, `signature`, `totalEndorsements` |
 | `check_bundle_quorum` | Evaluates multi-agent peer endorsements against a strict quorum policy | `bundleId`, `policy` (`minEndorsements`, `requiredRoles`, `disallowRejections`, `requireUniqueSigners`) | `satisfied` (boolean), `approvedCount`, `rejectedCount`, `missingRoles`, `failures` |
+| `evaluate_evidence_policy` | Evaluates bundle compliance against declarative rules in `evidence.policy.json` | `bundleId`, `policyPath?`, `policy?`, `strict?`, `workspacePath?` | `passed` (boolean), `summary`, `rulesEvaluated`, `evaluations` |
+| `dispatch_webhook_audit` | Dispatches an HMAC-SHA256 authenticated audit payload to a webhook URL | `bundleId`, `webhookUrl`, `secretToken?`, `includeProof?`, `headers?`, `timeoutMs?` | `delivered` (boolean), `statusCode`, `signatureHeader`, `durationMs` |
 
 ---
 
@@ -229,7 +231,26 @@ node dist/cli.js quorum bundle_9a41f0bc --min 3 --disallow-rejections --unique-s
 node dist/cli.js summary bundle_9a41f0bc
 
 # Automatically append to $GITHUB_STEP_SUMMARY in CI workflows:
-node dist/cli.js summary bundle_9a41f0bc --github-summary
+node dist/cli.js summary bundle_9a41f0bc --github
+```
+
+### 13. Declarative Policy Compliance Evaluation
+```bash
+# Evaluate compliance against workspace evidence.policy.json:
+node dist/cli.js policy bundle_9a41f0bc
+
+# Evaluate with custom policy file, strict mode, and JSON output:
+node dist/cli.js policy bundle_9a41f0bc --policy .compliance/strict.policy.json --strict --output ./eval.json
+# Exits with 0 if compliant; exits with 1 if violations are found
+```
+
+### 14. Remote Audit Webhook Dispatch
+```bash
+# Dispatch HMAC-SHA256 authenticated audit payload to remote webhook:
+node dist/cli.js webhook bundle_9a41f0bc https://audit.example.com/api/v1/evidence --secret my-secret-token
+
+# Dispatch including cryptographic Ed25519 verification proof:
+node dist/cli.js webhook bundle_9a41f0bc https://audit.example.com/api/v1/evidence --secret my-secret-token --proof
 ```
 
 ### CI/CD Pipeline Integration (GitHub Actions)
@@ -237,14 +258,17 @@ node dist/cli.js summary bundle_9a41f0bc --github-summary
 Evidence MCP provides an official composite action (`action.yml`) for seamless GitHub Actions CI/CD pipeline integration:
 
 ```yaml
-- name: Verify Agent Evidence & Multi-Agent Quorum
-  uses: mokashreef/Evidence-MCP@v0.8.0
+- name: Verify Agent Evidence, Quorum & Compliance Policy
+  uses: mokashreef/Evidence-MCP@v0.9.0
   with:
     bundle-id: ${{ env.BUNDLE_ID }}
+    require-quorum: 'true'
     min-endorsements: '2'
     required-roles: 'tester,security_auditor'
-    disallow-rejections: 'true'
-    write-summary: 'true'
+    require-policy: 'true'
+    policy-file: 'evidence.policy.json'
+    webhook-url: ${{ secrets.AUDIT_WEBHOOK_URL }}
+    webhook-secret: ${{ secrets.AUDIT_WEBHOOK_SECRET }}
 ```
 
 Or manually via CLI commands:
@@ -253,7 +277,8 @@ Or manually via CLI commands:
   run: |
     node dist/cli.js verify ${{ env.BUNDLE_ID }}
     node dist/cli.js quorum ${{ env.BUNDLE_ID }} --min 2 --roles tester,security_auditor
-    node dist/cli.js summary ${{ env.BUNDLE_ID }} --github-summary
+    node dist/cli.js policy ${{ env.BUNDLE_ID }} --strict
+    node dist/cli.js summary ${{ env.BUNDLE_ID }} --github
 ```
 
 ---
@@ -401,6 +426,32 @@ Here is how an agent interacts with Evidence MCP during a coding assignment:
 ```
 *Returns:* `{ "satisfied": true, "verdict": "approved", "approvedCount": 2, "rejectedCount": 0, "missingRoles": [], "failures": [] }`
 
+### 10. Automated Declarative Policy Compliance
+```json
+// Call: evaluate_evidence_policy
+{
+  "bundleId": "bundle_9a41f0bc",
+  "policy": {
+    "git": { "requireCleanWorkingTree": true, "allowedBranches": ["main", "feat/*"] },
+    "commands": { "requireServerExecutedCommands": true, "disallowNonZeroExitCodes": true },
+    "ast": { "disallowBreakingChanges": true }
+  }
+}
+```
+*Returns:* `{ "passed": true, "summary": "Policy compliance PASSED (3/3 rules satisfied).", "rulesEvaluated": 3, "evaluations": [...] }`
+
+### 11. Dispatch Cryptographically Authenticated Webhook
+```json
+// Call: dispatch_webhook_audit
+{
+  "bundleId": "bundle_9a41f0bc",
+  "webhookUrl": "https://compliance.internal/api/v1/evidence",
+  "secretToken": "ci-secret-token",
+  "includeProof": true
+}
+```
+*Returns:* `{ "delivered": true, "statusCode": 200, "signatureHeader": "sha256=...", "durationMs": 45 }`
+
 ---
 
 ## Security & Privacy Model
@@ -467,13 +518,18 @@ npm run build
 
 ---
 
-## Scope & Boundaries (v0.8.0)
+## Scope & Boundaries (v0.9.0)
 
-### Strictly In Scope for v0.8.0
+### Strictly In Scope for v0.9.0
+- Declarative Automated Evidence Policy Engine (`evaluate_evidence_policy` tool and `evidence-mcp policy` CLI).
+- Multi-dimensional compliance rules evaluated against Git state, file patterns, server command execution, AST breaking change detection, assertion backing, signatures, and consensus quorum.
+- Zero-external-dependency glob-like file pattern matcher supporting wildcards, extensions, and directory prefixes.
+- HMAC-SHA256 authenticated audit webhook dispatcher (`dispatch_webhook_audit` tool and `evidence-mcp webhook` CLI).
+- Safe network execution with timeouts via `AbortController` and signature generation (`X-Evidence-Signature`).
+- Official GitHub Actions composite action (`action.yml`) with automated policy checks, webhook delivery, and step summaries.
 - Multi-agent consensus protocol with Ed25519 peer endorsements (`endorse_evidence_bundle` tool and `evidence-mcp endorse` CLI).
 - Peer endorsement roles (`tester`, `security_auditor`, `architect`, `reviewer`, `peer_agent`) and verdicts (`approved`, `rejected`, `conditional`).
 - Flexible quorum policy engine (`check_bundle_quorum` tool and `evidence-mcp quorum` CLI) supporting threshold counting, mandatory roles, rejection vetoes, and unique signer checks.
-- Native GitHub Actions composite action (`action.yml`) with zero external runtime dependencies.
 - GitHub Step Summary Markdown generation (`generateGitHubStepSummary` and `evidence-mcp summary` CLI) displaying visual badge grids, AST breaking change alerts, and endorsement audit trails.
 - Offline-safe HTML and Markdown report extensions rendering peer review verdicts, roles, signatures, and timestamps.
 - Cryptographic verification proofs (`export_verification_proof` tool and `evidence-mcp proof create` CLI).
@@ -497,13 +553,13 @@ npm run build
 - Deterministic canonical payload serialization (`getCanonicalPayload`) for tamper resistance.
 - Cryptographic signature re-verification in `verify_evidence_bundle` and CLI `verify`.
 - Local file persistence under `.evidence-mcp/bundles/`, `.evidence-mcp/proofs/`, and key pairs under `.evidence-mcp/keys/`.
-- Standalone CLI interface (`verify`, `list`, `report`, `sign`, `exec`, `workspace`, `ast`, `proof`, `replay`, `endorse`, `quorum`, `summary`) with CI exit codes.
+- Standalone CLI interface (`verify`, `list`, `report`, `sign`, `exec`, `workspace`, `ast`, `proof`, `replay`, `endorse`, `quorum`, `summary`, `policy`, `webhook`) with CI exit codes.
 - Interactive, responsive, offline-safe HTML report generation with multi-workspace tables, AST symbol catalogs, peer endorsements, and badges.
 - Mandatory evidence-linked assertions.
 - Live verification of file hashes, Git status, AST symbols, and cryptographic signatures.
 - Markdown, JSON, and HTML report exporting.
 
-### Out of Scope for v0.8.0
+### Out of Scope for v0.9.0
 - **Direct Arbitrary Shell Command Execution:** Raw shell strings (e.g. `bash -c "..."`) without security boundaries are strictly rejected.
 - **Remote Publishing / Cloud Syncing:** Evidence bundles are local to the workspace. There is no auto-pushing to remote cloud APIs or external issue trackers.
 
@@ -517,7 +573,8 @@ npm run build
 - **v0.6 (Completed):** Diff-level syntax tree (AST) evidence capturing with breaking change detection.
 - **v0.7 (Completed):** Signed reproducible evidence replay & bundle verification proofs.
 - **v0.8 (Completed):** Multi-agent cross-verification consensus protocol & GitHub Step Summary composite action.
-- **v0.9:** Automated evidence policy engine, webhook notifications & distributed agent attestation registry.
+- **v0.9 (Completed):** Automated evidence policy engine & HMAC-signed audit webhooks.
+- **v1.0 (Production Release):** Stable API freeze, distributed agent attestation registry, and multi-tenant bundle signing.
 
 ---
 

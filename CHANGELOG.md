@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-11-09
+
+### Added
+- **Automated Evidence Policy Engine (`src/policy.ts`):**
+  - Declarative policy rules evaluation from `evidence.policy.json` (or `.evidence-policy.json`) across seven operational dimensions:
+    - `git`: required clean working tree, allowed branch patterns (`main`, `release/*`), and detached HEAD checks.
+    - `files`: maximum snapshot limits, mandatory file patterns (`src/**/*.ts`), and blocked file patterns (`.env*`, `*.key`).
+    - `commands`: server-executed runner enforcement, non-zero exit code restrictions, and required command pattern verification.
+    - `ast`: mandatory structural AST capture and strict breaking change prohibitions.
+    - `assertions`: minimum assertion counts and prohibition of unverifiable agent-only claims.
+    - `attestation`: mandatory cryptographic Ed25519 signatures and authorized signer key fingerprint allowlists.
+    - `consensus`: seamless delegation to multi-agent consensus quorum policies (`QuorumPolicy`).
+  - New MCP tool `evaluate_evidence_policy` (Tool 16): evaluates declarative compliance rules against an evidence bundle with detailed violation tracking and rule-by-rule reporting.
+  - New CLI command `evidence-mcp policy <bundleId> [--policy <file>] [--strict] [--output <file>]`: evaluates compliance and outputs formatted ASCII status tables with exit code 0/1 for CI/CD gates.
+- **Audit Webhook Dispatch & Notification System (`src/webhook.ts`):**
+  - Remote audit webhook dispatch with HMAC-SHA256 signature generation (`X-Evidence-Signature`) using secret tokens.
+  - Standard headers: `X-Evidence-Bundle-Id`, `X-Evidence-Digest`, `X-Evidence-Timestamp`, `X-Evidence-Event`.
+  - Optional inclusion of portable Ed25519 verification proofs (`includeProof: true`) directly in the webhook payload.
+  - Safe network execution with `AbortController` timeouts and graceful error handling.
+  - New MCP tool `dispatch_webhook_audit` (Tool 17): dispatches cryptographically authenticated audit payloads to remote HTTP/HTTPS webhook endpoints.
+  - New CLI command `evidence-mcp webhook <bundleId> <url> [--secret <token>] [--proof] [--timeout <ms>]`: dispatches audit notifications directly from the terminal.
+- **GitHub Actions Integration (`action.yml`):**
+  - Added `require-policy`, `policy-file`, `webhook-url`, and `webhook-secret` inputs for seamless CI/CD compliance gating.
+- **Comprehensive Test Coverage:**
+  - Added `test/policy.test.ts` (10 tests) and `test/webhook.test.ts` (5 tests) bringing total passing test suite to 155 tests across 15 test suites (100% green).
+
 ## [0.8.0] - 2026-11-09
 
 ### Added

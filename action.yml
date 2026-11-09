@@ -22,6 +22,22 @@ inputs:
     description: 'Comma-separated list of required reviewer roles (e.g. "tester,security_auditor").'
     required: false
     default: ''
+  require-policy:
+    description: 'Whether to enforce automated evidence policy compliance.'
+    required: false
+    default: 'false'
+  policy-file:
+    description: 'Optional path to evidence.policy.json file.'
+    required: false
+    default: ''
+  webhook-url:
+    description: 'Optional webhook URL to dispatch signed audit notification.'
+    required: false
+    default: ''
+  webhook-secret:
+    description: 'Optional HMAC-SHA256 secret token for webhook dispatch.'
+    required: false
+    default: ''
 
 runs:
   using: 'composite'
@@ -54,7 +70,28 @@ runs:
         fi
         node dist/cli.js quorum "${{ inputs.bundle-id }}" --min "${{ inputs.min-endorsements }}" $ROLES_ARG --workspace "${{ inputs.workspace-path }}"
 
+    - name: Evaluate Policy (if enabled)
+      if: ${{ inputs.require-policy == 'true' }}
+      shell: bash
+      run: |
+        POLICY_ARG=""
+        if [ -n "${{ inputs.policy-file }}" ]; then
+          POLICY_ARG="--policy ${{ inputs.policy-file }}"
+        fi
+        node dist/cli.js policy "${{ inputs.bundle-id }}" $POLICY_ARG --workspace "${{ inputs.workspace-path }}"
+
+    - name: Dispatch Webhook (if configured)
+      if: ${{ inputs.webhook-url != '' }}
+      shell: bash
+      run: |
+        SECRET_ARG=""
+        if [ -n "${{ inputs.webhook-secret }}" ]; then
+          SECRET_ARG="--secret ${{ inputs.webhook-secret }}"
+        fi
+        node dist/cli.js webhook "${{ inputs.bundle-id }}" "${{ inputs.webhook-url }}" $SECRET_ARG --proof --workspace "${{ inputs.workspace-path }}"
+
     - name: Generate GitHub Step Summary
       shell: bash
       run: |
         node dist/cli.js summary "${{ inputs.bundle-id }}" --github --workspace "${{ inputs.workspace-path }}"
+

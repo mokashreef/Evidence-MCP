@@ -1,6 +1,6 @@
 {
   "name": "evidence-mcp",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "Verifiable evidence collection and validation MCP server for AI coding agents.",
   "type": "module",
   "main": "./dist/index.js",
