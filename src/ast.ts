@@ -28,30 +28,37 @@ export function detectLanguage(filePath: string): string {
       return 'json';
     case '.py':
       return 'python';
+    case '.go':
+      return 'go';
+    case '.rs':
+      return 'rust';
     default:
       return 'other';
   }
 }
 
 /**
- * Splits parameter list string respecting nested brackets and strings.
+ * Splits a parameter list string at top-level commas while respecting nested brackets,
+ * angle brackets (generics), and quoted string literals.
  */
-export function parseParameters(rawParams: string): AstParameter[] {
+function splitTopLevelArgs(rawParams: string): string[] {
   const cleaned = rawParams.trim().replace(/^\(|\)$/g, '').trim();
   if (!cleaned) return [];
 
-  const params: AstParameter[] = [];
+  const parts: string[] = [];
   let depthParen = 0;
   let depthBrace = 0;
   let depthBracket = 0;
+  let depthAngle = 0;
   let inQuote: string | null = null;
   let current = '';
 
   for (let i = 0; i < cleaned.length; i++) {
     const char = cleaned[i];
+    const prev = cleaned[i - 1];
 
     if (inQuote) {
-      if (char === inQuote && cleaned[i - 1] !== '\\') {
+      if (char === inQuote && prev !== '\\') {
         inQuote = null;
       }
       current += char;
@@ -65,15 +72,23 @@ export function parseParameters(rawParams: string): AstParameter[] {
     }
 
     if (char === '(') depthParen++;
-    else if (char === ')') depthParen--;
+    else if (char === ')' && depthParen > 0) depthParen--;
     else if (char === '{') depthBrace++;
-    else if (char === '}') depthBrace--;
+    else if (char === '}' && depthBrace > 0) depthBrace--;
     else if (char === '[') depthBracket++;
-    else if (char === ']') depthBracket--;
+    else if (char === ']' && depthBracket > 0) depthBracket--;
+    else if (char === '<') depthAngle++;
+    else if (char === '>' && prev !== '=' && prev !== '-' && depthAngle > 0) depthAngle--;
 
-    if (char === ',' && depthParen === 0 && depthBrace === 0 && depthBracket === 0) {
+    if (
+      char === ',' &&
+      depthParen === 0 &&
+      depthBrace === 0 &&
+      depthBracket === 0 &&
+      depthAngle === 0
+    ) {
       if (current.trim()) {
-        params.push(parseSingleParameter(current.trim()));
+        parts.push(current.trim());
       }
       current = '';
     } else {
@@ -82,10 +97,47 @@ export function parseParameters(rawParams: string): AstParameter[] {
   }
 
   if (current.trim()) {
-    params.push(parseSingleParameter(current.trim()));
+    parts.push(current.trim());
   }
 
-  return params;
+  return parts;
+}
+
+/**
+ * Splits parameter list string respecting nested brackets and strings.
+ */
+export function parseParameters(rawParams: string): AstParameter[] {
+  return splitTopLevelArgs(rawParams).map(parseSingleParameter);
+}
+
+/**
+ * Parses Go parameter declarations including grouped types (e.g. "a, b int, opts *Config").
+ */
+function parseGoParameters(rawParams: string): AstParameter[] {
+  const segments = splitTopLevelArgs(rawParams);
+  if (segments.length === 0) return [];
+
+  const parsed: AstParameter[] = new Array(segments.length);
+  let trailingType: string | undefined;
+
+  for (let i = segments.length - 1; i >= 0; i--) {
+    const seg = segments[i].trim();
+    const spaceIdx = seg.search(/\s+/);
+    if (spaceIdx !== -1) {
+      const name = seg.slice(0, spaceIdx).trim();
+      const type = seg.slice(spaceIdx).trim();
+      trailingType = type;
+      parsed[i] = { name, optional: false, type };
+    } else if (trailingType) {
+      // Go grouped parameter inherits the type declared on the following segment
+      parsed[i] = { name: seg, optional: false, type: trailingType };
+    } else {
+      // Anonymous parameter type-only signature (e.g. func Foo(int, string))
+      parsed[i] = { name: seg, optional: false, type: seg };
+    }
+  }
+
+  return parsed;
 }
 
 function parseSingleParameter(paramStr: string): AstParameter {
@@ -95,12 +147,14 @@ function parseSingleParameter(paramStr: string): AstParameter {
   let depthParen = 0;
   let depthBrace = 0;
   let depthBracket = 0;
+  let depthAngle = 0;
   let inQuote: string | null = null;
 
   for (let i = 0; i < paramStr.length; i++) {
     const ch = paramStr[i];
+    const prev = paramStr[i - 1];
     if (inQuote) {
-      if (ch === inQuote && paramStr[i - 1] !== '\\') inQuote = null;
+      if (ch === inQuote && prev !== '\\') inQuote = null;
       continue;
     }
     if (ch === '"' || ch === "'" || ch === '`') {
@@ -108,13 +162,15 @@ function parseSingleParameter(paramStr: string): AstParameter {
       continue;
     }
     if (ch === '(') depthParen++;
-    else if (ch === ')') depthParen--;
+    else if (ch === ')' && depthParen > 0) depthParen--;
     else if (ch === '{') depthBrace++;
-    else if (ch === '}') depthBrace--;
+    else if (ch === '}' && depthBrace > 0) depthBrace--;
     else if (ch === '[') depthBracket++;
-    else if (ch === ']') depthBracket--;
+    else if (ch === ']' && depthBracket > 0) depthBracket--;
+    else if (ch === '<') depthAngle++;
+    else if (ch === '>' && prev !== '=' && prev !== '-' && depthAngle > 0) depthAngle--;
 
-    if (depthParen === 0 && depthBrace === 0 && depthBracket === 0) {
+    if (depthParen === 0 && depthBrace === 0 && depthBracket === 0 && depthAngle === 0) {
       if (ch === ':' && colonIdx === -1 && eqIdx === -1) {
         colonIdx = i;
       } else if (ch === '=' && paramStr[i + 1] !== '>' && eqIdx === -1) {
@@ -170,6 +226,14 @@ export function parseSourceSymbols(sourceCode: string, filePath: string): AstSym
 
   if (lang === 'python') {
     return parsePythonSymbols(sourceCode);
+  }
+
+  if (lang === 'go') {
+    return parseGoSymbols(sourceCode);
+  }
+
+  if (lang === 'rust') {
+    return parseRustSymbols(sourceCode);
   }
 
   return [];
@@ -463,6 +527,404 @@ function parsePythonSymbols(sourceCode: string): AstSymbol[] {
         startLine: lineNum,
         endLine: lineNum,
       });
+    }
+  }
+
+  return symbols;
+}
+
+/**
+ * Extracts content inside balanced parentheses starting at `openIdx` and returns
+ * both inner text and the index of the matching closing parenthesis.
+ */
+function extractBalancedParens(
+  str: string,
+  openIdx: number
+): { content: string; closeIdx: number } | null {
+  if (openIdx < 0 || str[openIdx] !== '(') return null;
+  let depth = 0;
+  let inQuote: string | null = null;
+
+  for (let i = openIdx; i < str.length; i++) {
+    const ch = str[i];
+    if (inQuote) {
+      if (ch === inQuote && str[i - 1] !== '\\') inQuote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === '`') {
+      inQuote = ch;
+      continue;
+    }
+    if (ch === '(') depth++;
+    else if (ch === ')') {
+      depth--;
+      if (depth === 0) {
+        return { content: str.slice(openIdx + 1, i), closeIdx: i };
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Strips block comments and single-line comments, returning trimmed line content and updated block state.
+ */
+function stripCStyleComments(
+  rawLine: string,
+  inBlockComment: boolean
+): { text: string; inBlockComment: boolean } {
+  let out = '';
+  let block = inBlockComment;
+  let inQuote: string | null = null;
+
+  for (let i = 0; i < rawLine.length; i++) {
+    const ch = rawLine[i];
+    const next = rawLine[i + 1];
+
+    if (block) {
+      if (ch === '*' && next === '/') {
+        block = false;
+        i++;
+      }
+      continue;
+    }
+
+    if (inQuote) {
+      out += ch;
+      if (ch === inQuote && rawLine[i - 1] !== '\\') inQuote = null;
+      continue;
+    }
+
+    if (ch === '"' || ch === "'" || ch === '`') {
+      inQuote = ch;
+      out += ch;
+      continue;
+    }
+
+    if (ch === '/' && next === '/') {
+      break;
+    }
+
+    if (ch === '/' && next === '*') {
+      block = true;
+      i++;
+      continue;
+    }
+
+    out += ch;
+  }
+
+  return { text: out.trim(), inBlockComment: block };
+}
+
+function countNetBraces(cleanLine: string): number {
+  let net = 0;
+  let inQuote: string | null = null;
+  for (let i = 0; i < cleanLine.length; i++) {
+    const ch = cleanLine[i];
+    if (inQuote) {
+      if (ch === inQuote && cleanLine[i - 1] !== '\\') inQuote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === '`') {
+      inQuote = ch;
+      continue;
+    }
+    if (ch === '{') net++;
+    else if (ch === '}') net--;
+  }
+  return net;
+}
+
+function isGoExported(identifier: string): boolean {
+  return /^[A-Z]/.test(identifier);
+}
+
+function formatGoSignature(
+  name: string,
+  params: AstParameter[],
+  returnType?: string,
+  receiver?: string
+): string {
+  const paramStr = params.map((p) => (p.type && p.type !== p.name ? `${p.name} ${p.type}` : p.name)).join(', ');
+  const retSuffix = returnType ? ` ${returnType}` : '';
+  const recvPrefix = receiver ? `(${receiver}) ` : '';
+  return `func ${recvPrefix}${name}(${paramStr})${retSuffix}`;
+}
+
+function parseGoSymbols(sourceCode: string): AstSymbol[] {
+  const symbols: AstSymbol[] = [];
+  const lines = sourceCode.split('\n');
+  let inBlockComment = false;
+
+  const typeStructRegex = /^type\s+([A-Za-z0-9_]+)(?:\[[^\]]*\])?\s+struct\b/;
+  const typeInterfaceRegex = /^type\s+([A-Za-z0-9_]+)(?:\[[^\]]*\])?\s+interface\b/;
+  const typeAliasRegex = /^type\s+([A-Za-z0-9_]+)(?:\[[^\]]*\])?\s+(.+)$/;
+
+  for (let i = 0; i < lines.length; i++) {
+    const { text: line, inBlockComment: nextBlock } = stripCStyleComments(lines[i], inBlockComment);
+    inBlockComment = nextBlock;
+    if (!line) continue;
+
+    const lineNum = i + 1;
+
+    // 1. Struct / Interface / Type declarations
+    const structMatch = line.match(typeStructRegex);
+    if (structMatch) {
+      const name = structMatch[1];
+      symbols.push({
+        name,
+        kind: 'class',
+        isExported: isGoExported(name),
+        signature: `type ${name} struct`,
+        startLine: lineNum,
+        endLine: lineNum,
+      });
+      continue;
+    }
+
+    const ifaceMatch = line.match(typeInterfaceRegex);
+    if (ifaceMatch) {
+      const name = ifaceMatch[1];
+      symbols.push({
+        name,
+        kind: 'interface',
+        isExported: isGoExported(name),
+        signature: `type ${name} interface`,
+        startLine: lineNum,
+        endLine: lineNum,
+      });
+      continue;
+    }
+
+    const aliasMatch = line.match(typeAliasRegex);
+    if (aliasMatch) {
+      const name = aliasMatch[1];
+      const def = aliasMatch[2].replace(/\{$/, '').trim();
+      symbols.push({
+        name,
+        kind: 'type',
+        isExported: isGoExported(name),
+        signature: `type ${name} ${def}`,
+        startLine: lineNum,
+        endLine: lineNum,
+      });
+      continue;
+    }
+
+    // 2. Function or Receiver Method declarations
+    if (!line.startsWith('func ') && !line.startsWith('func(')) {
+      continue;
+    }
+
+    let cursor = 4; // right after 'func'
+    while (cursor < line.length && /\s/.test(line[cursor])) cursor++;
+
+    let receiverType: string | undefined;
+    let receiverDisplay: string | undefined;
+
+    if (line[cursor] === '(') {
+      const recvGroup = extractBalancedParens(line, cursor);
+      if (!recvGroup) continue;
+      receiverDisplay = recvGroup.content.trim();
+      // Extract receiver type name (handles "s *Server", "*Server", "Server[T]")
+      const tokens = receiverDisplay.split(/\s+/);
+      const rawType = tokens[tokens.length - 1] || '';
+      receiverType = rawType.replace(/^\*/, '').replace(/\[.*\]$/, '').trim();
+      cursor = recvGroup.closeIdx + 1;
+      while (cursor < line.length && /\s/.test(line[cursor])) cursor++;
+    }
+
+    const rest = line.slice(cursor);
+    const fnNameMatch = rest.match(/^([A-Za-z0-9_]+)(?:\[[^\]]*\])?\s*\(/);
+    if (!fnNameMatch) continue;
+
+    const funcName = fnNameMatch[1];
+    const openParenIdx = cursor + rest.indexOf('(');
+    const paramGroup = extractBalancedParens(line, openParenIdx);
+    if (!paramGroup) continue;
+
+    const params = parseGoParameters(paramGroup.content);
+    const rawAfterParams = line
+      .slice(paramGroup.closeIdx + 1)
+      .replace(/\{$/, '')
+      .trim();
+    const returnType = rawAfterParams.length > 0 ? rawAfterParams : undefined;
+
+    if (receiverType) {
+      symbols.push({
+        name: `${receiverType}.${funcName}`,
+        kind: 'method',
+        isExported: isGoExported(funcName),
+        parameters: params,
+        returnType,
+        signature: formatGoSignature(funcName, params, returnType, receiverDisplay),
+        startLine: lineNum,
+        endLine: lineNum,
+      });
+    } else {
+      symbols.push({
+        name: funcName,
+        kind: 'function',
+        isExported: isGoExported(funcName),
+        parameters: params,
+        returnType,
+        signature: formatGoSignature(funcName, params, returnType),
+        startLine: lineNum,
+        endLine: lineNum,
+      });
+    }
+  }
+
+  return symbols;
+}
+
+function parseRustSymbols(sourceCode: string): AstSymbol[] {
+  const symbols: AstSymbol[] = [];
+  const lines = sourceCode.split('\n');
+  let inBlockComment = false;
+  let braceDepth = 0;
+  let currentContainer = '';
+  let containerDepth = -1;
+
+  const structRegex = /^(pub(?:\([^)]*\))?\s+)?struct\s+([A-Za-z0-9_]+)/;
+  const enumRegex = /^(pub(?:\([^)]*\))?\s+)?enum\s+([A-Za-z0-9_]+)/;
+  const traitRegex = /^(pub(?:\([^)]*\))?\s+)?(?:unsafe\s+)?trait\s+([A-Za-z0-9_]+)/;
+  const typeRegex = /^(pub(?:\([^)]*\))?\s+)?type\s+([A-Za-z0-9_]+)/;
+  const implRegex = /^(?:unsafe\s+)?impl(?:<[^>]*>)?\s+(?:.+?\s+for\s+)?([A-Za-z0-9_]+)(?:<[^>]*>)?(?:\s+where\b.*)?\s*\{/;
+  const fnPrefixRegex = /^(pub(?:\([^)]*\))?\s+)?(?:const\s+)?(?:unsafe\s+)?(async\s+)?fn\s+([A-Za-z0-9_]+)(?:<[^>]*>)?\s*\(/;
+
+  for (let i = 0; i < lines.length; i++) {
+    const { text: line, inBlockComment: nextBlock } = stripCStyleComments(lines[i], inBlockComment);
+    inBlockComment = nextBlock;
+
+    if (!line || line.startsWith('#[') || line.startsWith('#![')) {
+      continue;
+    }
+
+    const lineNum = i + 1;
+    const prevDepth = braceDepth;
+    const netBraces = countNetBraces(line);
+
+    const isPublicVis = (visGroup?: string): boolean => {
+      if (!visGroup) return false;
+      const v = visGroup.trim();
+      return v === 'pub';
+    };
+
+    const implMatch = line.match(implRegex);
+    const traitMatch = !implMatch ? line.match(traitRegex) : null;
+    const structMatch = !implMatch && !traitMatch ? line.match(structRegex) : null;
+    const enumMatch = !implMatch && !traitMatch && !structMatch ? line.match(enumRegex) : null;
+    const typeMatch =
+      !implMatch && !traitMatch && !structMatch && !enumMatch ? line.match(typeRegex) : null;
+
+    if (implMatch) {
+      currentContainer = implMatch[1];
+      containerDepth = prevDepth;
+    } else if (traitMatch) {
+      const exported = isPublicVis(traitMatch[1]);
+      const name = traitMatch[2];
+      symbols.push({
+        name,
+        kind: 'interface',
+        isExported: exported,
+        signature: `${exported ? 'pub ' : ''}trait ${name}`,
+        startLine: lineNum,
+        endLine: lineNum,
+      });
+      if (line.includes('{') && netBraces > 0) {
+        currentContainer = name;
+        containerDepth = prevDepth;
+      }
+    } else if (structMatch) {
+      const exported = isPublicVis(structMatch[1]);
+      const name = structMatch[2];
+      symbols.push({
+        name,
+        kind: 'class',
+        isExported: exported,
+        signature: `${exported ? 'pub ' : ''}struct ${name}`,
+        startLine: lineNum,
+        endLine: lineNum,
+      });
+    } else if (enumMatch) {
+      const exported = isPublicVis(enumMatch[1]);
+      const name = enumMatch[2];
+      symbols.push({
+        name,
+        kind: 'enum',
+        isExported: exported,
+        signature: `${exported ? 'pub ' : ''}enum ${name}`,
+        startLine: lineNum,
+        endLine: lineNum,
+      });
+    } else if (typeMatch) {
+      const exported = isPublicVis(typeMatch[1]);
+      const name = typeMatch[2];
+      symbols.push({
+        name,
+        kind: 'type',
+        isExported: exported,
+        signature: line.replace(/;$/, '').trim(),
+        startLine: lineNum,
+        endLine: lineNum,
+      });
+    } else {
+      const fnMatch = line.match(fnPrefixRegex);
+      if (fnMatch) {
+        const exported = isPublicVis(fnMatch[1]);
+        const isAsync = Boolean(fnMatch[2]);
+        const fnName = fnMatch[3];
+        const openParenIdx = line.indexOf('(', fnMatch[0].length - 1);
+        const paramGroup = extractBalancedParens(line, openParenIdx);
+
+        if (paramGroup) {
+          const allParsed = parseParameters(paramGroup.content);
+          const filteredParams = allParsed.filter(
+            (p) => !['self', '&self', '&mut self', 'mut self'].includes(p.name.trim())
+          );
+
+          const afterParams = line
+            .slice(paramGroup.closeIdx + 1)
+            .replace(/\{$/, '')
+            .replace(/;$/, '')
+            .trim();
+
+          let returnType: string | undefined;
+          const retMatch = afterParams.match(/^->\s*(.+?)(?:\s+where\b.*)?$/);
+          if (retMatch) {
+            returnType = retMatch[1].trim();
+          }
+
+          const isInsideContainer = currentContainer !== '' && prevDepth > containerDepth;
+          const kind: AstSymbolKind = isInsideContainer ? 'method' : 'function';
+          const fullName = isInsideContainer ? `${currentContainer}.${fnName}` : fnName;
+
+          const visPrefix = exported ? 'pub ' : '';
+          const asyncPrefix = isAsync ? 'async ' : '';
+          const retSuffix = returnType ? ` -> ${returnType}` : '';
+          const signature = `${visPrefix}${asyncPrefix}fn ${fnName}(${allParsed.map((p) => (p.type ? `${p.name}: ${p.type}` : p.name)).join(', ')})${retSuffix}`;
+
+          symbols.push({
+            name: fullName,
+            kind,
+            isExported: exported,
+            isAsync,
+            parameters: filteredParams,
+            returnType,
+            signature,
+            startLine: lineNum,
+            endLine: lineNum,
+          });
+        }
+      }
+    }
+
+    braceDepth += netBraces;
+    if (currentContainer && braceDepth <= containerDepth) {
+      currentContainer = '';
+      containerDepth = -1;
     }
   }
 
