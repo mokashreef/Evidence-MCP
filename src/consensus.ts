@@ -14,6 +14,7 @@ import {
 } from './attestation.js';
 import { computeBundleDigest } from './proof.js';
 import { generateId, saveBundle } from './storage.js';
+import { verifyAgentKeyStatusSync } from './registry.js';
 
 /**
  * Deterministically serializes an endorsement payload for cryptographic signing.
@@ -184,6 +185,7 @@ export function checkBundleQuorum(
     requiredRoles = [],
     requireUniqueSigners = true,
     disallowRejections = true,
+    requireTrustedRegistry = false,
   } = policy;
 
   const endorsements = bundle.endorsements || [];
@@ -202,6 +204,31 @@ export function checkBundleQuorum(
     const check = verifyPeerEndorsement(end, bundle);
     if (!check.valid) {
       reasons.push(`Invalid endorsement ${end.id} from agent "${end.agentId}": ${check.reason}`);
+      continue;
+    }
+
+    // Verify signer key against workspace trusted agent key registry
+    try {
+      const regStatus = verifyAgentKeyStatusSync({
+        workspacePath: bundle.workspacePath,
+        agentId: end.agentId,
+        keyFingerprint: end.signer.keyFingerprint,
+      });
+
+      if (regStatus.registered && !regStatus.active) {
+        reasons.push(`Untrusted endorsement ${end.id} from agent "${end.agentId}": ${regStatus.reason}`);
+        continue;
+      }
+      if (requireTrustedRegistry && (!regStatus.registered || !regStatus.active)) {
+        reasons.push(
+          `Unregistered endorsement ${end.id} from agent "${end.agentId}": ${regStatus.reason}`
+        );
+        continue;
+      }
+    } catch (err: unknown) {
+      reasons.push(
+        `Registry validation failed for endorsement ${end.id} (${end.agentId}): ${(err as Error).message}`
+      );
       continue;
     }
 
@@ -268,6 +295,7 @@ export function checkBundleQuorum(
       requiredRoles,
       requireUniqueSigners,
       disallowRejections,
+      requireTrustedRegistry,
     },
     reasons,
     endorsements,

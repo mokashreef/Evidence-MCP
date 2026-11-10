@@ -6,10 +6,17 @@ import {
   registerTrustedAgent,
   revokeTrustedAgent,
   getAgentKeyStatus,
+  verifyAgentKeyStatusSync,
   listTrustedAgents,
   loadAgentRegistry,
 } from '../src/registry.js';
-import { generateAgentKeyPair } from '../src/attestation.js';
+import { generateAgentKeyPair, signEvidenceBundle } from '../src/attestation.js';
+import { createPeerEndorsement, checkBundleQuorum } from '../src/consensus.js';
+import { verifyEvidenceBundle } from '../src/verifier.js';
+import { evaluateEvidencePolicy } from '../src/policy.js';
+import { saveBundle, generateId } from '../src/storage.js';
+import { computeFileSha256AndSize } from '../src/hasher.js';
+import { EvidenceBundle, EvidencePolicy } from '../src/types.js';
 import { runCli } from '../src/cli.js';
 
 describe('Distributed Agent Key Registry', () => {
@@ -200,6 +207,292 @@ describe('Distributed Agent Key Registry', () => {
       // Verify revoked state in registry file
       const registry = await loadAgentRegistry(tempWorkspace);
       expect(registry.agents['agent:cli-bot'].status).toBe('revoked');
+    });
+  });
+
+  describe('Registry Verification & Policy Enforcement', () => {
+    async function createSignedBundleForTest(
+      signerPrivateKeyPem?: string
+    ): Promise<EvidenceBundle> {
+      const targetFile = path.join(tempWorkspace, 'app.ts');
+      await fs.promises.writeFile(targetFile, 'export const version = 1;\n', 'utf8');
+      const { sha256, sizeBytes } = await computeFileSha256AndSize(targetFile);
+      const now = new Date().toISOString();
+      const fileId = generateId('file');
+
+      const bundle: EvidenceBundle = {
+        id: generateId('bundle'),
+        task: 'Registry security check',
+        workspacePath: tempWorkspace,
+        status: 'in_progress',
+        createdAt: now,
+        updatedAt: now,
+        evidence: {
+          fileSnapshots: [
+            {
+              id: fileId,
+              type: 'file_snapshot',
+              capturedAt: now,
+              path: 'app.ts',
+              absolutePath: targetFile,
+              sha256,
+              sizeBytes,
+            },
+          ],
+        },
+        assertions: [
+          {
+            id: generateId('assert'),
+            claim: 'app.ts snapshot valid',
+            evidenceIds: [fileId],
+            createdAt: now,
+          },
+        ],
+      };
+
+      if (signerPrivateKeyPem) {
+        bundle.attestation = await signEvidenceBundle(bundle, signerPrivateKeyPem);
+      }
+
+      await saveBundle(bundle);
+      return bundle;
+    }
+
+    it('rejects bundle attestation signed by a revoked or expired key in verifyEvidenceBundle', async () => {
+      const coderKeys = generateAgentKeyPair();
+
+      await registerTrustedAgent({
+        workspacePath: tempWorkspace,
+        agentId: 'agent:coder',
+        name: 'Coder Agent',
+        role: 'architect',
+        publicKeyPem: coderKeys.publicKeyPem,
+      });
+
+      const bundle = await createSignedBundleForTest(coderKeys.privateKeyPem);
+
+      // Active key passes verification
+      const activeVerify = await verifyEvidenceBundle(bundle);
+      expect(activeVerify.status).toBe('verified');
+
+      // Revoke the key and re-verify
+      await revokeTrustedAgent({
+        workspacePath: tempWorkspace,
+        agentId: 'agent:coder',
+        reason: 'Key leaked',
+      });
+
+      const revokedVerify = await verifyEvidenceBundle(bundle);
+      expect(revokedVerify.status).toBe('failed');
+      expect(
+        revokedVerify.items.find((i) => i.id === 'attestation')?.details
+      ).toContain('revoked');
+    });
+
+    it('blocks revoked keys, fingerprint spoofing, and enforces strict registry mode in checkBundleQuorum', async () => {
+      const qaKeys = generateAgentKeyPair();
+      const rogueKeys = generateAgentKeyPair();
+
+      await registerTrustedAgent({
+        workspacePath: tempWorkspace,
+        agentId: 'agent:qa-trusted',
+        name: 'QA Trusted',
+        role: 'tester',
+        publicKeyPem: qaKeys.publicKeyPem,
+      });
+
+      const bundle = await createSignedBundleForTest();
+
+      // 1. Impersonation attack: claiming registered agent:qa-trusted with rogue key
+      const spoofedEndorsement = await createPeerEndorsement({
+        bundle,
+        agentId: 'agent:qa-trusted',
+        role: 'tester',
+        verdict: 'approved',
+        comment: 'Spoofed key attempt',
+        privateKeyPem: rogueKeys.privateKeyPem,
+        workspacePath: tempWorkspace,
+      });
+
+      const spoofQuorum = checkBundleQuorum(bundle, { minEndorsements: 1 });
+      expect(spoofQuorum.satisfied).toBe(false);
+      expect(spoofQuorum.reasons.some((r) => r.includes('does not match registered fingerprint'))).toBe(
+        true
+      );
+
+      // Replace with unregistered agentId signed by rogueKeys
+      bundle.endorsements = [];
+      await createPeerEndorsement({
+        bundle,
+        agentId: 'agent:unregistered-bot',
+        role: 'tester',
+        verdict: 'approved',
+        comment: 'Unregistered approval',
+        privateKeyPem: rogueKeys.privateKeyPem,
+        workspacePath: tempWorkspace,
+      });
+
+      // Permissive mode allows unregistered keys if not revoked
+      expect(checkBundleQuorum(bundle, { minEndorsements: 1 }).satisfied).toBe(true);
+
+      // Strict registry mode rejects unregistered keys
+      const strictQuorum = checkBundleQuorum(bundle, {
+        minEndorsements: 1,
+        requireTrustedRegistry: true,
+      });
+      expect(strictQuorum.satisfied).toBe(false);
+      expect(strictQuorum.reasons.some((r) => r.includes('not registered'))).toBe(true);
+
+      // 2. Revoke QA key, then test both direct agentId and spoofed alias reuse of revoked key
+      await revokeTrustedAgent({
+        workspacePath: tempWorkspace,
+        agentId: 'agent:qa-trusted',
+        reason: 'Rotated out',
+      });
+
+      bundle.endorsements = [];
+      await createPeerEndorsement({
+        bundle,
+        agentId: 'agent:alias-attacker',
+        role: 'tester',
+        verdict: 'approved',
+        comment: 'Reusing revoked key under new alias',
+        privateKeyPem: qaKeys.privateKeyPem,
+        workspacePath: tempWorkspace,
+      });
+
+      const revokedAliasQuorum = checkBundleQuorum(bundle, {
+        minEndorsements: 1,
+        requireTrustedRegistry: false,
+      });
+      expect(revokedAliasQuorum.satisfied).toBe(false);
+      expect(revokedAliasQuorum.reasons.some((r) => r.includes('revoked'))).toBe(true);
+
+      expect(spoofedEndorsement.id).toBeDefined();
+    });
+
+    it('enforces attestation.requireTrustedRegistry and consensus.requireTrustedRegistry in evaluateEvidencePolicy', async () => {
+      const coderKeys = generateAgentKeyPair();
+      const reviewerKeys = generateAgentKeyPair();
+
+      const bundle = await createSignedBundleForTest(coderKeys.privateKeyPem);
+      await createPeerEndorsement({
+        bundle,
+        agentId: 'agent:sec-reviewer',
+        role: 'security_auditor',
+        verdict: 'approved',
+        comment: 'Reviewed securely',
+        privateKeyPem: reviewerKeys.privateKeyPem,
+        workspacePath: tempWorkspace,
+      });
+      await saveBundle(bundle);
+
+      const policy: EvidencePolicy = {
+        attestation: {
+          requireSignature: true,
+          requireTrustedRegistry: true,
+        },
+        consensus: {
+          minEndorsements: 1,
+          requireTrustedRegistry: true,
+        },
+      };
+
+      // Neither signer is registered yet -> fails
+      const initialEval = evaluateEvidencePolicy({ bundle, policy });
+      expect(initialEval.passed).toBe(false);
+      expect(
+        initialEval.evaluations.find((e) => e.rule === 'attestation.requireTrustedRegistry')?.passed
+      ).toBe(false);
+      expect(initialEval.evaluations.find((e) => e.rule === 'consensus.quorum')?.passed).toBe(false);
+
+      // Register both agents
+      await registerTrustedAgent({
+        workspacePath: tempWorkspace,
+        agentId: 'agent:coder',
+        name: 'Coder',
+        role: 'architect',
+        publicKeyPem: coderKeys.publicKeyPem,
+      });
+      await registerTrustedAgent({
+        workspacePath: tempWorkspace,
+        agentId: 'agent:sec-reviewer',
+        name: 'Sec Reviewer',
+        role: 'security_auditor',
+        publicKeyPem: reviewerKeys.publicKeyPem,
+      });
+
+      const passedEval = evaluateEvidencePolicy({ bundle, policy });
+      expect(passedEval.passed).toBe(true);
+      expect(
+        passedEval.evaluations.find((e) => e.rule === 'attestation.requireTrustedRegistry')?.passed
+      ).toBe(true);
+
+      // Revoke coder key -> attestation fails even with requireTrustedRegistry false
+      await revokeTrustedAgent({
+        workspacePath: tempWorkspace,
+        agentId: 'agent:coder',
+        reason: 'Key rotated',
+      });
+
+      const revokedEval = evaluateEvidencePolicy({
+        bundle,
+        policy: {
+          attestation: { requireSignature: true, requireTrustedRegistry: false },
+        },
+      });
+      expect(revokedEval.passed).toBe(false);
+    });
+
+    it('supports --require-registry flag in evidence-mcp quorum CLI command', async () => {
+      const reviewerKeys = generateAgentKeyPair();
+      const bundle = await createSignedBundleForTest();
+      await createPeerEndorsement({
+        bundle,
+        agentId: 'agent:cli-reviewer',
+        role: 'tester',
+        verdict: 'approved',
+        comment: 'CLI approved',
+        privateKeyPem: reviewerKeys.privateKeyPem,
+        workspacePath: tempWorkspace,
+      });
+      await saveBundle(bundle);
+
+      // Fails when --require-registry is set and agent not registered
+      const unregisteredCode = await runCli([
+        'quorum',
+        bundle.id,
+        '--require-registry',
+        '--workspace',
+        tempWorkspace,
+      ]);
+      expect(unregisteredCode).toBe(1);
+
+      // Register and retry -> passes
+      await registerTrustedAgent({
+        workspacePath: tempWorkspace,
+        agentId: 'agent:cli-reviewer',
+        name: 'CLI Reviewer',
+        role: 'tester',
+        publicKeyPem: reviewerKeys.publicKeyPem,
+      });
+
+      const registeredCode = await runCli([
+        'quorum',
+        bundle.id,
+        '--require-registry',
+        '--workspace',
+        tempWorkspace,
+      ]);
+      expect(registeredCode).toBe(0);
+
+      // Verify sync helper directly handles missing workspace gracefully
+      const missingStatus = verifyAgentKeyStatusSync({
+        workspacePath: path.join(tempWorkspace, 'non-existent-dir'),
+        keyFingerprint: reviewerKeys.fingerprint,
+      });
+      expect(missingStatus.registryExists).toBe(false);
+      expect(missingStatus.registered).toBe(false);
     });
   });
 });
