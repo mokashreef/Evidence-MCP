@@ -38,6 +38,10 @@ inputs:
     description: 'Optional HMAC-SHA256 secret token for webhook dispatch.'
     required: false
     default: ''
+  sarif-output:
+    description: 'Optional output path for SARIF v2.1.0 report (e.g. evidence-results.sarif) for GitHub Code Scanning.'
+    required: false
+    default: ''
 
 runs:
   using: 'composite'
@@ -89,6 +93,16 @@ runs:
           SECRET_ARG="--secret ${{ inputs.webhook-secret }}"
         fi
         node dist/cli.js webhook "${{ inputs.bundle-id }}" "${{ inputs.webhook-url }}" $SECRET_ARG --proof --workspace "${{ inputs.workspace-path }}"
+
+    - name: Export SARIF Report (if configured)
+      if: ${{ inputs.sarif-output != '' }}
+      shell: bash
+      run: |
+        POLICY_ARG=""
+        if [ -n "${{ inputs.policy-file }}" ]; then
+          POLICY_ARG="--policy ${{ inputs.policy-file }}"
+        fi
+        node dist/cli.js report "${{ inputs.bundle-id }}" --format sarif $POLICY_ARG --output "${{ inputs.sarif-output }}" --workspace "${{ inputs.workspace-path }}"
 
     - name: Generate GitHub Step Summary
       shell: bash

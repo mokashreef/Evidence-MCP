@@ -216,7 +216,8 @@ export type VerifyEvidenceBundleInput = z.infer<typeof VerifyEvidenceBundleSchem
 
 export const ExportEvidenceReportSchema = z.object({
   bundleId: z.string().min(1, 'bundleId is required.'),
-  format: z.enum(['markdown', 'json', 'html']).default('markdown'),
+  format: z.enum(['markdown', 'json', 'html', 'sarif']).default('markdown'),
+  policyPath: z.string().optional(),
   workspacePath: z.string().optional(),
 });
 export type ExportEvidenceReportInput = z.infer<typeof ExportEvidenceReportSchema>;
@@ -574,3 +575,58 @@ export const ListTrustedAgentsSchema = z.object({
   status: z.enum(['active', 'revoked', 'suspended', 'all']).default('all'),
 });
 export type ListTrustedAgentsInput = z.infer<typeof ListTrustedAgentsSchema>;
+
+// ==========================================
+// SARIF v2.1.0 Report Types
+// ==========================================
+
+export type SarifLevel = 'error' | 'warning' | 'note' | 'none';
+
+export interface SarifRuleDescriptor {
+  id: string;
+  name?: string;
+  shortDescription: { text: string };
+  defaultConfiguration?: { level: SarifLevel };
+  properties?: { tags?: string[] };
+}
+
+export interface SarifPhysicalLocation {
+  artifactLocation: {
+    uri: string;
+    uriBaseId?: string;
+  };
+  region?: {
+    startLine: number;
+    endLine?: number;
+  };
+}
+
+export interface SarifResult {
+  ruleId: string;
+  level: SarifLevel;
+  message: { text: string };
+  locations?: Array<{
+    physicalLocation: SarifPhysicalLocation;
+  }>;
+  properties?: Record<string, unknown>;
+}
+
+export interface SarifReport {
+  $schema: string;
+  version: '2.1.0';
+  runs: Array<{
+    tool: {
+      driver: {
+        name: string;
+        version: string;
+        informationUri: string;
+        rules: SarifRuleDescriptor[];
+      };
+    };
+    invocations?: Array<{
+      executionSuccessful: boolean;
+      properties?: Record<string, unknown>;
+    }>;
+    results: SarifResult[];
+  }>;
+}
