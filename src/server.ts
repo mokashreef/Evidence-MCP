@@ -440,20 +440,43 @@ export function createEvidenceServer(): McpServer {
   // 7. export_evidence_report
   server.tool(
     'export_evidence_report',
-    'Produces an evidence report in Markdown, JSON, or HTML format with clear distinction between verified and agent-reported evidence.',
+    'Produces an evidence report in Markdown, JSON, HTML, or SARIF v2.1.0 format with clear distinction between verified and agent-reported evidence.',
     {
       bundleId: z.string().min(1).describe('The unique identifier of the evidence bundle to export.'),
       format: z
-        .enum(['markdown', 'json', 'html'])
+        .enum(['markdown', 'json', 'html', 'sarif'])
         .default('markdown')
-        .describe('Output format: "markdown", "json", or "html".'),
+        .describe('Output format: "markdown", "json", "html", or "sarif".'),
+      policyPath: z
+        .string()
+        .optional()
+        .describe('Optional path to evidence.policy.json to include policy violations in SARIF exports.'),
       workspacePath: z.string().optional().describe('Optional workspace path hint.'),
     },
-    async ({ bundleId, format, workspacePath }) => {
+    async ({ bundleId, format, policyPath, workspacePath }) => {
       try {
         const bundle = await loadBundle(bundleId, workspacePath);
         const verification = await verifyEvidenceBundle(bundle);
-        const report = exportEvidenceReport(bundle, format, verification);
+
+        let policyEvaluation;
+        if (format === 'sarif') {
+          const loaded = await loadPolicyFile(policyPath, bundle.workspacePath);
+          if (loaded) {
+            policyEvaluation = evaluateEvidencePolicy({
+              bundle,
+              policy: loaded.policy,
+              verificationResult: verification,
+            });
+          }
+        }
+
+        const report = exportEvidenceReport(
+          bundle,
+          format,
+          verification,
+          undefined,
+          policyEvaluation
+        );
 
         return {
           content: [

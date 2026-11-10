@@ -1,4 +1,13 @@
-import { EvidenceBundle, VerificationResult, VerificationProof } from './types.js';
+import {
+  EvidenceBundle,
+  PolicyEvaluationResult,
+  SarifLevel,
+  SarifReport,
+  SarifResult,
+  SarifRuleDescriptor,
+  VerificationProof,
+  VerificationResult,
+} from './types.js';
 
 /**
  * Escapes characters for safe inclusion in HTML.
@@ -13,13 +22,14 @@ export function escapeHtml(str: string): string {
 }
 
 /**
- * Formats an evidence bundle and optional verification results into Markdown, JSON, or standalone HTML.
+ * Formats an evidence bundle and optional verification/policy results into Markdown, JSON, HTML, or SARIF v2.1.0.
  */
 export function exportEvidenceReport(
   bundle: EvidenceBundle,
-  format: 'markdown' | 'json' | 'html',
+  format: 'markdown' | 'json' | 'html' | 'sarif',
   verification?: VerificationResult,
-  proof?: VerificationProof
+  proof?: VerificationProof,
+  policyEvaluation?: PolicyEvaluationResult
 ): string {
   if (format === 'json') {
     return JSON.stringify(
@@ -27,6 +37,7 @@ export function exportEvidenceReport(
         bundle,
         verification: verification || null,
         proof: proof || null,
+        policyEvaluation: policyEvaluation || null,
       },
       null,
       2
@@ -35,6 +46,10 @@ export function exportEvidenceReport(
 
   if (format === 'html') {
     return generateHtmlReport(bundle, verification, proof);
+  }
+
+  if (format === 'sarif') {
+    return formatSarifReport(bundle, verification, policyEvaluation);
   }
 
   // Markdown format
@@ -778,4 +793,240 @@ function generateHtmlReport(
   </div>
 </body>
 </html>`;
+}
+
+function normalizeSarifUri(filePath: string): string {
+  return filePath.replace(/\\/g, '/').replace(/^\.\//, '');
+}
+
+/**
+ * Formats verification findings, AST breaking changes, and policy violations
+ * into OASIS SARIF v2.1.0 JSON for native GitHub Code Scanning ingestion.
+ */
+export function formatSarifReport(
+  bundle: EvidenceBundle,
+  verification?: VerificationResult,
+  policyEvaluation?: PolicyEvaluationResult
+): string {
+  const rulesMap = new Map<string, SarifRuleDescriptor>();
+  const results: SarifResult[] = [];
+
+  const registerRule = (
+    id: string,
+    shortDescription: string,
+    level: SarifLevel,
+    tags: string[]
+  ) => {
+    if (!rulesMap.has(id)) {
+      rulesMap.set(id, {
+        id,
+        name: id,
+        shortDescription: { text: shortDescription },
+        defaultConfiguration: { level },
+        properties: { tags },
+      });
+    }
+  };
+
+  const defaultBundleUri = normalizeSarifUri(`.evidence-mcp/bundles/${bundle.id}.json`);
+
+  // Index evidence IDs to file URIs so verification items resolve exact physical paths
+  const evidencePathMap = new Map<string, string>();
+  for (const snap of bundle.evidence.fileSnapshots || []) {
+    evidencePathMap.set(snap.id, normalizeSarifUri(snap.path));
+  }
+  for (const astEv of bundle.evidence.ast || []) {
+    evidencePathMap.set(astEv.id, normalizeSarifUri(astEv.filePath));
+  }
+
+  // 1. Verification findings (failed / stale / unverifiable)
+  if (verification) {
+    for (const item of verification.items) {
+      if (item.status === 'verified' || item.status === 'recorded') {
+        continue;
+      }
+
+      const level: SarifLevel =
+        item.status === 'failed'
+          ? 'error'
+          : item.status === 'stale'
+          ? 'warning'
+          : 'note';
+
+      const ruleId = `EVIDENCE-${item.status.toUpperCase()}-${item.type.toUpperCase()}`;
+      registerRule(
+        ruleId,
+        `Evidence ${item.type} verification ${item.status}`,
+        level,
+        ['evidence-mcp', 'verification', item.type]
+      );
+
+      const resolvedUri =
+        evidencePathMap.get(item.id) ||
+        (item.target ? normalizeSarifUri(item.target) : defaultBundleUri);
+
+      results.push({
+        ruleId,
+        level,
+        message: { text: item.details },
+        locations: [
+          {
+            physicalLocation: {
+              artifactLocation: { uri: resolvedUri, uriBaseId: '%SRCROOT%' },
+              region: { startLine: 1 },
+            },
+          },
+        ],
+        properties: {
+          bundleId: bundle.id,
+          evidenceId: item.id,
+          status: item.status,
+        },
+      });
+    }
+  }
+
+  // 2. AST Breaking Changes with exact source symbol line regions
+  for (const astEv of bundle.evidence.ast || []) {
+    if (!astEv.diff?.isBreakingChange) {
+      continue;
+    }
+
+    const fileUri = normalizeSarifUri(astEv.filePath);
+    registerRule(
+      'AST-BREAKING-CHANGE',
+      'Breaking semantic change detected in exported AST symbol',
+      'error',
+      ['evidence-mcp', 'ast', 'breaking-change']
+    );
+
+    for (const removed of astEv.diff.removedSymbols) {
+      if (!removed.isExported) continue;
+      results.push({
+        ruleId: 'AST-BREAKING-CHANGE',
+        level: 'error',
+        message: {
+          text: `Breaking change in ${astEv.filePath}: exported ${removed.kind} "${removed.name}" was removed.`,
+        },
+        locations: [
+          {
+            physicalLocation: {
+              artifactLocation: { uri: fileUri, uriBaseId: '%SRCROOT%' },
+              region: {
+                startLine: Math.max(1, removed.startLine || 1),
+                endLine: Math.max(1, removed.endLine || removed.startLine || 1),
+              },
+            },
+          },
+        ],
+        properties: {
+          language: astEv.language,
+          symbolName: removed.name,
+          changeType: 'removed_exported_symbol',
+        },
+      });
+    }
+
+    for (const mod of astEv.diff.modifiedSymbols) {
+      results.push({
+        ruleId: 'AST-BREAKING-CHANGE',
+        level: 'error',
+        message: {
+          text: `Breaking change in ${astEv.filePath} (${mod.symbol.name}): ${mod.changes.join(' ')}`,
+        },
+        locations: [
+          {
+            physicalLocation: {
+              artifactLocation: { uri: fileUri, uriBaseId: '%SRCROOT%' },
+              region: {
+                startLine: Math.max(1, mod.symbol.startLine || 1),
+                endLine: Math.max(1, mod.symbol.endLine || mod.symbol.startLine || 1),
+              },
+            },
+          },
+        ],
+        properties: {
+          language: astEv.language,
+          symbolName: mod.symbol.name,
+          changeType: 'modified_exported_symbol',
+        },
+      });
+    }
+  }
+
+  // 3. Policy Compliance Violations
+  if (policyEvaluation) {
+    for (const evalItem of policyEvaluation.evaluations) {
+      if (evalItem.passed) {
+        continue;
+      }
+
+      const level: SarifLevel = evalItem.severity === 'error' ? 'error' : 'warning';
+      const ruleId = `POLICY-${evalItem.rule.toUpperCase().replace(/[^A-Z0-9]+/g, '-')}`;
+
+      registerRule(
+        ruleId,
+        `Evidence policy violation: ${evalItem.rule}`,
+        level,
+        ['evidence-mcp', 'policy', evalItem.category]
+      );
+
+      const fallbackPolicyUri =
+        evalItem.category === 'license' ? 'package.json' : 'evidence.policy.json';
+
+      results.push({
+        ruleId,
+        level,
+        message: { text: evalItem.message },
+        locations: [
+          {
+            physicalLocation: {
+              artifactLocation: { uri: fallbackPolicyUri, uriBaseId: '%SRCROOT%' },
+              region: { startLine: 1 },
+            },
+          },
+        ],
+        properties: {
+          bundleId: bundle.id,
+          category: evalItem.category,
+          rule: evalItem.rule,
+          details: evalItem.details,
+        },
+      });
+    }
+  }
+
+  const executionSuccessful =
+    (!verification || verification.status === 'verified') &&
+    (!policyEvaluation || policyEvaluation.passed);
+
+  const report: SarifReport = {
+    $schema: 'https://json.schemastore.org/sarif-2.1.0.json',
+    version: '2.1.0',
+    runs: [
+      {
+        tool: {
+          driver: {
+            name: 'Evidence MCP',
+            version: '1.1.0',
+            informationUri: 'https://github.com/mokashreef/Evidence-MCP',
+            rules: Array.from(rulesMap.values()),
+          },
+        },
+        invocations: [
+          {
+            executionSuccessful,
+            properties: {
+              bundleId: bundle.id,
+              bundleStatus: verification?.status || bundle.status,
+              policyPassed: policyEvaluation?.passed,
+            },
+          },
+        ],
+        results,
+      },
+    ],
+  };
+
+  return JSON.stringify(report, null, 2);
 }

@@ -35,7 +35,7 @@ Usage:
   evidence-mcp                                      Start the MCP server on stdio (default)
   evidence-mcp list [workspacePath]                 List all evidence bundles in workspace
   evidence-mcp verify <bundleId> [options]          Verify an evidence bundle against disk & Git
-  evidence-mcp report <bundleId> [options]          Export an evidence report (markdown|json|html)
+  evidence-mcp report <bundleId> [options]          Export an evidence report (markdown|json|html|sarif)
   evidence-mcp sign <bundleId> [options]            Sign a bundle using an Ed25519 keypair
   evidence-mcp exec <bundleId> <cmd> [args...]      Execute an approved command in sandboxed runner
   evidence-mcp workspace add <bundleId> <name> <p>  Register a package or sub-workspace in bundle
@@ -61,7 +61,7 @@ Options:
   --preset <profile>       Policy preset for init: recommended, strict, or permissive
   --force, -f              Overwrite existing policy file during init
   --no-gitignore           Skip adding .evidence-mcp/ to .gitignore during init
-  --format, -f <format>    Report format: markdown, json, or html (default: markdown)
+  --format, -f <format>    Report format: markdown, json, html, or sarif (default: markdown)
   --output, -o <file>      Write exported report, proof, or summary directly to file
   --key, -k <file>         Private key file for Ed25519 signing (auto-generates if omitted)
   --timeout <ms>           Execution timeout in milliseconds (default: 30000)
@@ -203,23 +203,26 @@ export async function runCli(args: string[]): Promise<number> {
   if (firstArg === 'report') {
     const bundleId = args[1];
     if (!bundleId || bundleId.startsWith('-')) {
-      console.error('Error: bundleId is required for report command.\nUsage: evidence-mcp report <bundleId> [--format markdown|json|html]');
+      console.error('Error: bundleId is required for report command.\nUsage: evidence-mcp report <bundleId> [--format markdown|json|html|sarif]');
       return 1;
     }
 
-    let format: 'markdown' | 'json' | 'html' = 'markdown';
+    let format: 'markdown' | 'json' | 'html' | 'sarif' = 'markdown';
     let outputPath: string | undefined;
     let workspace: string | undefined;
+    let policyPath: string | undefined;
 
     for (let i = 2; i < args.length; i++) {
       if ((args[i] === '--format' || args[i] === '-f') && args[i + 1]) {
         const fmt = args[++i].toLowerCase();
-        if (fmt === 'markdown' || fmt === 'json' || fmt === 'html') {
+        if (fmt === 'markdown' || fmt === 'json' || fmt === 'html' || fmt === 'sarif') {
           format = fmt;
         } else {
-          console.error(`Invalid format "${fmt}". Allowed formats: markdown, json, html.`);
+          console.error(`Invalid format "${fmt}". Allowed formats: markdown, json, html, sarif.`);
           return 1;
         }
+      } else if ((args[i] === '--policy' || args[i] === '-p') && args[i + 1]) {
+        policyPath = args[++i];
       } else if ((args[i] === '--output' || args[i] === '-o') && args[i + 1]) {
         outputPath = args[++i];
       } else if ((args[i] === '--workspace' || args[i] === '-w') && args[i + 1]) {
@@ -230,7 +233,26 @@ export async function runCli(args: string[]): Promise<number> {
     try {
       const bundle = await loadBundle(bundleId, workspace);
       const verification = await verifyEvidenceBundle(bundle);
-      const report = exportEvidenceReport(bundle, format, verification);
+
+      let policyEvaluation;
+      if (format === 'sarif') {
+        const loadedPolicy = await loadPolicyFile(policyPath, bundle.workspacePath);
+        if (loadedPolicy) {
+          policyEvaluation = evaluateEvidencePolicy({
+            bundle,
+            policy: loadedPolicy.policy,
+            verificationResult: verification,
+          });
+        }
+      }
+
+      const report = exportEvidenceReport(
+        bundle,
+        format,
+        verification,
+        undefined,
+        policyEvaluation
+      );
 
       if (outputPath) {
         const resolvedOutput = path.resolve(outputPath);
