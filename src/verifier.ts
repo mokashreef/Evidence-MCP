@@ -12,6 +12,7 @@ import { captureGitState, isGitRepository, GitInspectionResult } from './git.js'
 import { saveBundle, resolveWorkspaceForBundle } from './storage.js';
 import { assertSafeFilePath, SafeFilePathResult } from './security.js';
 import { verifyBundleAttestation } from './attestation.js';
+import { verifyAgentKeyStatusSync } from './registry.js';
 import { parseSourceSymbols } from './ast.js';
 
 /**
@@ -476,17 +477,10 @@ export async function verifyEvidenceBundle(bundle: EvidenceBundle): Promise<Veri
     }
   }
 
-  // 5. Verify Cryptographic Attestation (if present)
+  // 5. Verify Cryptographic Attestation & Registry Status (if present)
   if (bundle.attestation) {
     const attestationCheck = verifyBundleAttestation(bundle);
-    if (attestationCheck.valid) {
-      items.push({
-        id: 'attestation',
-        type: 'attestation',
-        status: 'verified',
-        details: `Ed25519 signature verified (Key: ${bundle.attestation.keyFingerprint.slice(0, 16)}...)`,
-      });
-    } else {
+    if (!attestationCheck.valid) {
       items.push({
         id: 'attestation',
         type: 'attestation',
@@ -496,6 +490,65 @@ export async function verifyEvidenceBundle(bundle: EvidenceBundle): Promise<Veri
       reasons.push(
         `Attestation failure: ${attestationCheck.reason || 'Signature mismatch: bundle content was tampered with.'}`
       );
+    } else {
+      let registryRejection: string | undefined;
+      try {
+        const regStatus = verifyAgentKeyStatusSync({
+          workspacePath: bundle.workspacePath,
+          keyFingerprint: bundle.attestation.keyFingerprint,
+        });
+        if (regStatus.registered && !regStatus.active) {
+          registryRejection = regStatus.reason || 'Signing key is inactive or revoked in agent registry.';
+        }
+      } catch (err: unknown) {
+        registryRejection = (err as Error).message;
+      }
+
+      if (registryRejection) {
+        items.push({
+          id: 'attestation',
+          type: 'attestation',
+          status: 'failed',
+          details: `Registry verification failed: ${registryRejection}`,
+        });
+        reasons.push(`Attestation failure: ${registryRejection}`);
+      } else {
+        items.push({
+          id: 'attestation',
+          type: 'attestation',
+          status: 'verified',
+          details: `Ed25519 signature verified (Key: ${bundle.attestation.keyFingerprint.slice(0, 16)}...)`,
+        });
+      }
+    }
+  }
+
+  // Check endorsement keys against registry revocations/mismatches if registry exists
+  if (bundle.endorsements && bundle.endorsements.length > 0) {
+    for (const endorsement of bundle.endorsements) {
+      let registryError: string | undefined;
+      try {
+        const regStatus = verifyAgentKeyStatusSync({
+          workspacePath: bundle.workspacePath,
+          agentId: endorsement.agentId,
+          keyFingerprint: endorsement.signer.keyFingerprint,
+        });
+        if (regStatus.registered && !regStatus.active) {
+          registryError = regStatus.reason || 'Endorsement signer key is revoked or inactive.';
+        }
+      } catch (err: unknown) {
+        registryError = (err as Error).message;
+      }
+
+      if (registryError) {
+        items.push({
+          id: endorsement.id,
+          type: 'attestation',
+          status: 'failed',
+          details: `Endorsement "${endorsement.id}" (${endorsement.agentId}) failed registry check: ${registryError}`,
+        });
+        reasons.push(`Endorsement registry failure (${endorsement.agentId}): ${registryError}`);
+      }
     }
   }
 

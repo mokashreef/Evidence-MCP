@@ -9,6 +9,7 @@ import {
 } from './types.js';
 import { checkBundleQuorum } from './consensus.js';
 import { verifyBundleAttestation } from './attestation.js';
+import { verifyAgentKeyStatusSync, RegistryVerificationStatus } from './registry.js';
 
 /**
  * Matches a relative or absolute file path against a glob-like pattern.
@@ -529,6 +530,27 @@ export function evaluateEvidencePolicy(options: {
 
   // 6. Attestation Rules
   if (policy.attestation) {
+    let registryStatus: RegistryVerificationStatus | undefined;
+    let registryError: string | undefined;
+    let registryFailureReported = false;
+
+    if (bundle.attestation) {
+      try {
+        registryStatus = verifyAgentKeyStatusSync({
+          workspacePath: bundle.workspacePath,
+          keyFingerprint: bundle.attestation.keyFingerprint,
+        });
+      } catch (err: unknown) {
+        registryError = (err as Error).message;
+      }
+    }
+
+    const inactiveRegistryReason =
+      registryError ||
+      (registryStatus && registryStatus.registered && !registryStatus.active
+        ? registryStatus.reason || 'Signer key is revoked or inactive in agent registry.'
+        : undefined);
+
     if (policy.attestation.requireSignature) {
       if (!bundle.attestation) {
         evaluations.push({
@@ -547,6 +569,15 @@ export function evaluateEvidencePolicy(options: {
             passed: false,
             severity: 'error',
             message: `Bundle signature is invalid: ${verifyRes.reason}`,
+          });
+        } else if (inactiveRegistryReason) {
+          registryFailureReported = true;
+          evaluations.push({
+            rule: 'attestation.requireSignature',
+            category: 'attestation',
+            passed: false,
+            severity: 'error',
+            message: `Bundle signer key rejected by trusted registry: ${inactiveRegistryReason}`,
           });
         } else {
           evaluations.push({
@@ -580,6 +611,15 @@ export function evaluateEvidencePolicy(options: {
             severity: 'error',
             message: `Signer key fingerprint "${fp}" is not in policy allowed list: [${policy.attestation.allowedFingerprints.join(', ')}].`,
           });
+        } else if (inactiveRegistryReason) {
+          registryFailureReported = true;
+          evaluations.push({
+            rule: 'attestation.allowedFingerprints',
+            category: 'attestation',
+            passed: false,
+            severity: 'error',
+            message: `Signer key fingerprint "${fp}" is inactive in registry: ${inactiveRegistryReason}`,
+          });
         } else {
           evaluations.push({
             rule: 'attestation.allowedFingerprints',
@@ -590,6 +630,57 @@ export function evaluateEvidencePolicy(options: {
           });
         }
       }
+    }
+
+    if (policy.attestation.requireTrustedRegistry) {
+      if (!bundle.attestation) {
+        evaluations.push({
+          rule: 'attestation.requireTrustedRegistry',
+          category: 'attestation',
+          passed: false,
+          severity: 'error',
+          message: 'Bundle is unsigned; cannot verify signer in trusted agent registry.',
+        });
+      } else if (registryError) {
+        registryFailureReported = true;
+        evaluations.push({
+          rule: 'attestation.requireTrustedRegistry',
+          category: 'attestation',
+          passed: false,
+          severity: 'error',
+          message: `Failed to verify signer in agent registry: ${registryError}`,
+        });
+      } else if (!registryStatus?.registered || !registryStatus.active) {
+        registryFailureReported = true;
+        evaluations.push({
+          rule: 'attestation.requireTrustedRegistry',
+          category: 'attestation',
+          passed: false,
+          severity: 'error',
+          message: registryStatus?.reason || 'Signer key is not active in the trusted agent registry.',
+          details: { keyFingerprint: bundle.attestation.keyFingerprint },
+        });
+      } else {
+        evaluations.push({
+          rule: 'attestation.requireTrustedRegistry',
+          category: 'attestation',
+          passed: true,
+          severity: 'error',
+          message: `Signer key verified as active in trusted agent registry (${registryStatus.agent?.agentId || bundle.attestation.keyFingerprint}).`,
+          details: {
+            agentId: registryStatus.agent?.agentId,
+            keyFingerprint: bundle.attestation.keyFingerprint,
+          },
+        });
+      }
+    } else if (inactiveRegistryReason && !registryFailureReported) {
+      evaluations.push({
+        rule: 'attestation.registryStatus',
+        category: 'attestation',
+        passed: false,
+        severity: 'error',
+        message: `Signer key rejected by workspace agent registry: ${inactiveRegistryReason}`,
+      });
     }
   }
 
@@ -816,11 +907,13 @@ export const POLICY_PRESETS: Record<PolicyPreset, EvidencePolicy> = {
     },
     attestation: {
       requireSignature: true,
+      requireTrustedRegistry: true,
     },
     consensus: {
       minEndorsements: 1,
       requireUniqueSigners: true,
       disallowRejections: true,
+      requireTrustedRegistry: true,
     },
   },
   permissive: {

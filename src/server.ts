@@ -942,6 +942,10 @@ export function createEvidenceServer(): McpServer {
         .describe('Array of required reviewer roles (e.g. ["tester", "security_auditor"]).'),
       requireUniqueSigners: z.boolean().default(true).describe('Enforce unique signer keys and agent IDs.'),
       disallowRejections: z.boolean().default(true).describe('Fail quorum if any explicit rejection exists.'),
+      requireTrustedRegistry: z
+        .boolean()
+        .default(false)
+        .describe('Require all endorser agent keys to be registered and active in the workspace agent registry.'),
       workspacePath: z.string().optional().describe('Optional workspace path hint to locate the bundle.'),
     },
     async ({
@@ -950,6 +954,7 @@ export function createEvidenceServer(): McpServer {
       requiredRoles,
       requireUniqueSigners,
       disallowRejections,
+      requireTrustedRegistry,
       workspacePath,
     }) => {
       try {
@@ -959,6 +964,7 @@ export function createEvidenceServer(): McpServer {
           requiredRoles,
           requireUniqueSigners,
           disallowRejections,
+          requireTrustedRegistry,
         });
 
         return {

@@ -74,6 +74,7 @@ Options:
   --comment <text>         Review commentary text
   --min <count>            Minimum approved endorsements required for quorum (default: 1)
   --roles <roles...>       Comma-separated list of required endorsement roles
+  --require-registry       Require endorsers to be active in workspace trusted agent registry
   --policy, -p <file>      Path to evidence.policy.json file
   --strict                 Enforce strict policy compliance (fail on warnings)
   --secret, -s <token>     Secret key for HMAC-SHA256 webhook signature
@@ -764,6 +765,7 @@ export async function runCli(args: string[]): Promise<number> {
 
     let minEndorsements = 1;
     let requiredRoles: PeerEndorsementRole[] = [];
+    let requireTrustedRegistry = false;
     let workspace: string | undefined;
 
     for (let i = 2; i < args.length; i++) {
@@ -771,6 +773,8 @@ export async function runCli(args: string[]): Promise<number> {
         minEndorsements = parseInt(args[++i], 10);
       } else if (args[i] === '--roles' && args[i + 1]) {
         requiredRoles = args[++i].split(',').map((r) => r.trim() as PeerEndorsementRole);
+      } else if (args[i] === '--require-registry') {
+        requireTrustedRegistry = true;
       } else if ((args[i] === '--workspace' || args[i] === '-w') && args[i + 1]) {
         workspace = args[++i];
       }
@@ -781,6 +785,7 @@ export async function runCli(args: string[]): Promise<number> {
       const quorumResult = checkBundleQuorum(bundle, {
         minEndorsements,
         requiredRoles: requiredRoles.length > 0 ? requiredRoles : undefined,
+        requireTrustedRegistry,
       });
 
       console.log(`\nConsensus Quorum Check: ${bundle.id}`);

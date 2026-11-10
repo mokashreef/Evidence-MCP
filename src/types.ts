@@ -346,6 +346,7 @@ export interface QuorumPolicy {
   requiredRoles?: PeerEndorsementRole[];
   requireUniqueSigners?: boolean;
   disallowRejections?: boolean;
+  requireTrustedRegistry?: boolean;
 }
 
 export interface QuorumResult {
@@ -378,6 +379,7 @@ export const CheckBundleQuorumSchema = z.object({
   requiredRoles: z.array(z.enum(['tester', 'security_auditor', 'architect', 'peer_reviewer'])).optional(),
   requireUniqueSigners: z.boolean().default(true),
   disallowRejections: z.boolean().default(true),
+  requireTrustedRegistry: z.boolean().default(false),
   workspacePath: z.string().optional(),
 });
 export type CheckBundleQuorumInput = z.infer<typeof CheckBundleQuorumSchema>;
@@ -418,6 +420,7 @@ export interface EvidencePolicyAssertionRules {
 export interface EvidencePolicyAttestationRules {
   requireSignature?: boolean;
   allowedFingerprints?: string[];
+  requireTrustedRegistry?: boolean;
 }
 
 export interface EvidencePolicyLicenseRules {
