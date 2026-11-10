@@ -24,7 +24,7 @@ import {
 import path from 'node:path';
 import fs from 'node:fs';
 
-const VERSION = '1.1.0';
+const VERSION = '1.2.0';
 
 export function printHelp(): void {
   console.log(`
