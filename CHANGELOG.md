@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-11-10
+
+### Added
+- **Python Structural AST Parsing & Semantic Diffing (`src/ast.ts`, PR #6):**
+  - Zero-dependency Python symbol extraction (`parsePythonSymbols`) supporting functions, `async def`, classes, class methods, parameters, return type annotations, and private/public visibility via `_` naming convention.
+  - Full integration into `capture_ast_evidence`, `evidence-mcp ast`, Git HEAD semantic diffing, and Markdown/HTML reports.
+- **Runner Concurrency Semaphore & Buffer Guards (`src/runner.ts`, PR #7):**
+  - Process-level concurrency semaphore (`acquireExecutionSlot`, `releaseExecutionSlot`, `setMaxRunnerConcurrency`, `getActiveRunnerProcesses`) limiting parallel child processes (default cap: 4) to prevent resource exhaustion during concurrent execution runs.
+- **Automated Policy Bootstrapping Wizard (`evidence-mcp init`, PR #8):**
+  - New CLI command `evidence-mcp init [--preset recommended|strict|permissive] [--force] [--no-gitignore]` powered by `initWorkspacePolicy` and `POLICY_PRESETS` in `src/policy.ts`.
+  - Automatically generates `evidence.policy.json` and adds `.evidence-mcp/` to `.gitignore`.
+- **Multi-Agent Consensus Tutorial & Simulation (`examples/multi-agent-consensus/`, PR #9):**
+  - End-to-end runnable orchestration demo (`orchestrate.ts`) demonstrating Coder, Security Auditor, and QA Tester agents creating, signing, endorsing, and validating bundles against quorum and policy rules.
+  - Complete step-by-step architectural guide in `examples/multi-agent-consensus/TUTORIAL.md` verified by `test/examples.test.ts`.
+- **Package License Compliance Policy Rule (`src/policy.ts`, `src/types.ts`, PR #10):**
+  - New `license` rule dimension in `EvidencePolicy` supporting `requireLicenseField`, `allowedLicenses`, and `disallowedLicenses` evaluated against root and secondary workspace `package.json` declarations.
+
+### Security
+- **Enforced Trusted Agent Key Registry Verification (`src/registry.ts`, `src/verifier.ts`, `src/consensus.ts`, `src/policy.ts`, PR #12):**
+  - Integrated synchronous registry verification (`verifyAgentKeyStatusSync`) into `verifyEvidenceBundle`, `checkBundleQuorum`, and `evaluateEvidencePolicy`.
+  - Automatically rejects explicitly `revoked`, `suspended`, `expired`, or fingerprint-spoofed keys whenever a workspace registry is present.
+  - Added opt-in strict allowlist mode (`requireTrustedRegistry: true`) on `QuorumPolicy`, `EvidencePolicy.attestation`, `check_bundle_quorum` MCP tool, `POLICY_PRESETS.strict`, and CLI `evidence-mcp quorum --require-registry`.
+  - Expanded test suite to 171 passing tests across 17 test files.
+
 ## [1.0.0] - 2026-11-09 - Production Release
 
 ### Added

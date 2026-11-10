@@ -15,7 +15,7 @@ describe('Evidence Verification Engine', () => {
   });
 
   afterEach(async () => {
-    await fs.promises.rm(tempWorkspace, { recursive: true, force: true });
+    await fs.promises.rm(tempWorkspace, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   it('marks bundle as verified when files match and assertions are supported by independently verified evidence', async () => {
