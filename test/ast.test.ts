@@ -170,6 +170,167 @@ def _private_worker():
       expect(fetchMetrics?.parameters?.[1].defaultValue).toBe('30');
     });
 
+    it('extracts Go structs, interfaces, functions, grouped parameters, receiver methods, and detects breaking diffs', () => {
+      expect(detectLanguage('server.go')).toBe('go');
+
+      const goSource = `
+package server
+
+/* Commented struct should be ignored:
+type Ghost struct {}
+*/
+
+type TokenStore interface {
+  Get(id string) (string, error)
+}
+
+type AuthServer struct {
+  port int
+}
+
+type ServerID = string
+
+// NewServer constructs an AuthServer instance
+func NewServer(host, bindAddr string, port int) (*AuthServer, error) {
+  return &AuthServer{port: port}, nil
+}
+
+func (s *AuthServer) Validate(ctx context.Context, strict bool) error {
+  return nil
+}
+
+func internalSanitize(raw string) string {
+  return raw
+}
+`;
+
+      const symbols = parseSourceSymbols(goSource, 'server.go');
+      const names = symbols.map((s) => s.name);
+
+      expect(names).not.toContain('Ghost');
+      expect(names).toContain('TokenStore');
+      expect(names).toContain('AuthServer');
+      expect(names).toContain('ServerID');
+      expect(names).toContain('NewServer');
+      expect(names).toContain('AuthServer.Validate');
+      expect(names).toContain('internalSanitize');
+
+      const store = symbols.find((s) => s.name === 'TokenStore')!;
+      expect(store.kind).toBe('interface');
+      expect(store.isExported).toBe(true);
+
+      const newServer = symbols.find((s) => s.name === 'NewServer')!;
+      expect(newServer.kind).toBe('function');
+      expect(newServer.isExported).toBe(true);
+      expect(newServer.returnType).toBe('(*AuthServer, error)');
+      expect(newServer.parameters).toEqual([
+        { name: 'host', optional: false, type: 'string' },
+        { name: 'bindAddr', optional: false, type: 'string' },
+        { name: 'port', optional: false, type: 'int' },
+      ]);
+
+      const validate = symbols.find((s) => s.name === 'AuthServer.Validate')!;
+      expect(validate.kind).toBe('method');
+      expect(validate.isExported).toBe(true);
+      expect(validate.returnType).toBe('error');
+
+      const helper = symbols.find((s) => s.name === 'internalSanitize')!;
+      expect(helper.isExported).toBe(false);
+
+      // Verify breaking change detection when required parameter is added to exported Go method
+      const modifiedGo = goSource.replace(
+        'func (s *AuthServer) Validate(ctx context.Context, strict bool) error {',
+        'func (s *AuthServer) Validate(ctx context.Context, strict bool, scope string) error {'
+      );
+      const nextSymbols = parseSourceSymbols(modifiedGo, 'server.go');
+      const diff = computeSemanticDiff(symbols, nextSymbols, 'server.go');
+      expect(diff.hasChanges).toBe(true);
+      expect(diff.isBreakingChange).toBe(true);
+    });
+
+    it('extracts Rust traits, structs, enums, async fn, generic parameters, impl methods, and detects breaking diffs', () => {
+      expect(detectLanguage('verifier.rs')).toBe('rust');
+
+      const rustSource = `
+#[derive(Debug, Clone)]
+pub struct TokenConfig {
+    pub timeout_ms: u64,
+}
+
+pub enum AuthMode {
+    Strict,
+    Permissive,
+}
+
+pub trait TokenVerifier {
+    fn scheme(&self) -> &str;
+}
+
+pub type ClaimsMap = HashMap<String, Vec<u8>>;
+
+impl TokenConfig {
+    pub async fn verify_claims(&self, token: &str, headers: HashMap<String, Vec<u8>>) -> Result<bool, String> {
+        Ok(true)
+    }
+
+    pub(crate) fn helper_flag(&self) -> bool {
+        true
+    }
+}
+
+pub async fn bootstrap_verifier(endpoint: &str) -> Result<TokenConfig, String> {
+    todo!()
+}
+
+fn private_hash(input: &[u8]) -> u64 {
+    0
+}
+`;
+
+      const symbols = parseSourceSymbols(rustSource, 'verifier.rs');
+      const names = symbols.map((s) => s.name);
+
+      expect(names).toContain('TokenConfig');
+      expect(names).toContain('AuthMode');
+      expect(names).toContain('TokenVerifier');
+      expect(names).toContain('TokenVerifier.scheme');
+      expect(names).toContain('ClaimsMap');
+      expect(names).toContain('TokenConfig.verify_claims');
+      expect(names).toContain('TokenConfig.helper_flag');
+      expect(names).toContain('bootstrap_verifier');
+      expect(names).toContain('private_hash');
+
+      const verifyClaims = symbols.find((s) => s.name === 'TokenConfig.verify_claims')!;
+      expect(verifyClaims.kind).toBe('method');
+      expect(verifyClaims.isExported).toBe(true);
+      expect(verifyClaims.isAsync).toBe(true);
+      expect(verifyClaims.returnType).toBe('Result<bool, String>');
+      // Generic commas inside HashMap<String, Vec<u8>> must stay together as 2 parameters (after stripping &self)
+      expect(verifyClaims.parameters?.length).toBe(2);
+      expect(verifyClaims.parameters?.[1]).toEqual({
+        name: 'headers',
+        optional: false,
+        type: 'HashMap<String, Vec<u8>>',
+        defaultValue: undefined,
+      });
+
+      const crateHelper = symbols.find((s) => s.name === 'TokenConfig.helper_flag')!;
+      expect(crateHelper.isExported).toBe(false);
+
+      const privHash = symbols.find((s) => s.name === 'private_hash')!;
+      expect(privHash.isExported).toBe(false);
+
+      // Verify breaking change detection when pub fn becomes private or removed
+      const brokenRust = rustSource.replace(
+        'pub async fn bootstrap_verifier',
+        'fn bootstrap_verifier'
+      );
+      const nextSymbols = parseSourceSymbols(brokenRust, 'verifier.rs');
+      const diff = computeSemanticDiff(symbols, nextSymbols, 'verifier.rs');
+      expect(diff.hasChanges).toBe(true);
+      expect(diff.isBreakingChange).toBe(true);
+    });
+
     it('extracts top-level keys from JSON files', () => {
       const jsonSource = JSON.stringify({
         name: 'evidence-mcp',
