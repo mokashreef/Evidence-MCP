@@ -100,7 +100,7 @@ All data is stored locally in human-readable JSON files inside the workspace roo
 
 ---
 
-## Tools Catalog (v1.1.0)
+## Tools Catalog (v1.2.0)
 
 Evidence MCP provides nineteen focused tools through the Model Context Protocol:
 
@@ -109,14 +109,14 @@ Evidence MCP provides nineteen focused tools through the Model Context Protocol:
 | `create_evidence_bundle` | Initializes a new evidence bundle for a task | `task`, `workspacePath`, `metadata?`, `additionalWorkspaces?` | `bundleId`, initial status (`in_progress`) |
 | `register_workspace` | Dynamically binds a named monorepo package or secondary repository | `bundleId`, `name`, `path` | `workspaceName`, `workspacePath`, `allWorkspaces` |
 | `capture_git_evidence` | Safely records Git HEAD, branch, and status in targeted workspace | `bundleId`, `workspaceName?`, `workspacePath?` | `evidenceId`, `branch`, `headCommit`, `isClean` |
-| `capture_ast_evidence` | Extracts TypeScript/JavaScript/Python AST symbols and computes semantic diffs | `bundleId`, `files`, `workspaceName?`, `compareWithGitHead?` | `astEvidence: [{ id, filePath, symbolsCount, hasSemanticChanges, isBreakingChange }]` |
+| `capture_ast_evidence` | Extracts TypeScript/JavaScript/Python/Go/Rust AST symbols and computes semantic diffs | `bundleId`, `files`, `workspaceName?`, `compareWithGitHead?` | `astEvidence: [{ id, filePath, symbolsCount, hasSemanticChanges, isBreakingChange }]` |
 | `execute_verified_command` | Spawns an approved command in sandboxed runner with concurrency bounds | `bundleId`, `command`, `args?`, `cwd?`, `workspaceName?` | `evidenceId`, `exitCode`, `durationMs`, `provenance: server_executed` |
 | `record_command_result` | Logs agent-reported command execution result (provenance: agent_reported) | `bundleId`, `command`, `exitCode`, `stdout`, `stderr`, `workspaceName?` | `evidenceId`, `command`, `exitCode`, `provenance` |
 | `snapshot_files` | Computes SHA-256 and size for regular files inside workspace boundary | `bundleId`, `paths`, `workspaceName?` | `snapshots: [{ evidenceId, workspaceName, path, sha256 }]` |
 | `add_assertion` | Attaches a claim linked to supporting evidence | `bundleId`, `claim`, `evidenceIds` (min 1) | `assertionId`, `claim`, `evidenceIds` |
 | `sign_evidence_bundle` | Cryptographically signs the bundle using native Ed25519 | `bundleId`, `agentId?`, `privateKeyPath?` | `attestation: { agentId, algorithm, publicKey, signature }` |
 | `verify_evidence_bundle` | Validates file hashes, Git state, AST symbols, command results, signatures, and registry state | `bundleId`, `workspacePath?` | `status` (`verified` \| `stale` \| `failed` \| `unverifiable`), `items`, `reasons` |
-| `export_evidence_report` | Generates a shareable Markdown, JSON, or interactive HTML report | `bundleId`, `format` (`markdown` \| `json` \| `html`) | Formatted report ready for PR or handoff |
+| `export_evidence_report` | Generates a shareable Markdown, JSON, HTML, or SARIF v2.1.0 report | `bundleId`, `format` (`markdown` \| `json` \| `html` \| `sarif`), `policyPath?` | Formatted report ready for PR, handoff, or GitHub Code Scanning |
 | `export_verification_proof` | Issues an Ed25519 cryptographically signed portable verification proof | `bundleId`, `privateKeyPem?`, `workspacePath?` | `proofId`, `verdict`, `bundleDigest`, `signature` |
 | `verify_replay_proof` | Verifies cryptographic signature and digest consistency of an exported proof | `proofId?`, `proofJson?`, `bundleId?` | `valid` (boolean), `verdict`, `bundleDigestMatches` |
 | `endorse_evidence_bundle` | Cryptographically signs a multi-agent peer review endorsement or veto | `bundleId`, `agentId`, `role`, `verdict`, `comment`, `privateKeyPem?` | `endorsementId`, `verdict`, `signature`, `totalEndorsements` |
@@ -172,10 +172,13 @@ node dist/cli.js sign bundle_9a41f0bc
 node dist/cli.js sign bundle_9a41f0bc --key /path/to/agent_private.pem
 ```
 
-### 6. Export an Interactive HTML or Markdown Report
+### 6. Export Interactive HTML, Markdown, or SARIF v2.1.0 Reports
 ```bash
 # Export standalone, offline-safe interactive HTML report:
 node dist/cli.js report bundle_9a41f0bc --format html --output ./reports/evidence.html
+
+# Export OASIS SARIF v2.1.0 report for GitHub Code Scanning (including policy violations):
+node dist/cli.js report bundle_9a41f0bc --format sarif --policy evidence.policy.json --output ./results.sarif
 
 # Output formatted Markdown to stdout:
 node dist/cli.js report bundle_9a41f0bc --format markdown
@@ -284,7 +287,7 @@ Evidence MCP provides an official composite action (`action.yml`) for seamless G
 
 ```yaml
 - name: Verify Agent Evidence, Quorum & Compliance Policy
-  uses: mokashreef/Evidence-MCP@v1.1.0
+  uses: mokashreef/Evidence-MCP@v1.2.0
   with:
     bundle-id: ${{ env.BUNDLE_ID }}
     require-quorum: 'true'
@@ -292,6 +295,7 @@ Evidence MCP provides an official composite action (`action.yml`) for seamless G
     required-roles: 'tester,security_auditor'
     require-policy: 'true'
     policy-file: 'evidence.policy.json'
+    sarif-output: 'evidence-results.sarif'
     webhook-url: ${{ secrets.AUDIT_WEBHOOK_URL }}
     webhook-secret: ${{ secrets.AUDIT_WEBHOOK_SECRET }}
 ```
@@ -556,9 +560,9 @@ npm run build
 
 ---
 
-## Scope & Boundaries (v1.1.0)
+## Scope & Boundaries (v1.2.0)
 
-### Strictly In Scope for v1.1.0
+### Strictly In Scope for v1.2.0
 - Distributed Trusted Agent Key Registry (`register_trusted_agent` & `revoke_trusted_agent` tools, and `evidence-mcp registry` CLI) with active enforcement in verification, quorum, and policy checks (`requireTrustedRegistry`).
 - Workspace-level cryptographic agent identity lifecycle management (`active`, `revoked`, `suspended`) with expiration and fingerprint binding verification.
 - Declarative Automated Evidence Policy Engine (`evaluate_evidence_policy` tool, `evidence-mcp policy`, and `evidence-mcp init` bootstrapping wizard with `recommended`/`strict`/`permissive` presets).
@@ -566,16 +570,16 @@ npm run build
 - Zero-external-dependency glob-like file pattern matcher supporting wildcards, extensions, and directory prefixes.
 - HMAC-SHA256 authenticated audit webhook dispatcher (`dispatch_webhook_audit` tool and `evidence-mcp webhook` CLI).
 - Safe network execution with timeouts via `AbortController` and signature generation (`X-Evidence-Signature`).
-- Official GitHub Actions composite action (`action.yml`) with automated policy checks, webhook delivery, and step summaries.
+- Official GitHub Actions composite action (`action.yml`) with automated policy checks, SARIF export (`sarif-output`), webhook delivery, and step summaries.
 - Multi-agent consensus protocol with Ed25519 peer endorsements (`endorse_evidence_bundle` tool and `evidence-mcp endorse` CLI).
 - Peer endorsement roles (`tester`, `security_auditor`, `architect`, `peer_reviewer`) and verdicts (`approved`, `rejected`, `changes_requested`).
 - Flexible quorum policy engine (`check_bundle_quorum` tool and `evidence-mcp quorum` CLI) supporting threshold counting, mandatory roles, rejection vetoes, unique signer checks, and `--require-registry`.
 - GitHub Step Summary Markdown generation (`generateGitHubStepSummary` and `evidence-mcp summary` CLI) displaying visual badge grids, AST breaking change alerts, and endorsement audit trails.
-- Offline-safe HTML and Markdown report extensions rendering peer review verdicts, roles, signatures, and timestamps.
+- Offline-safe HTML, Markdown, JSON, and OASIS SARIF v2.1.0 report exporting (`export_evidence_report` and `evidence-mcp report`).
 - Cryptographic verification proofs (`export_verification_proof` tool and `evidence-mcp proof create` CLI).
 - Proof verification and digest validation (`verify_replay_proof` tool and `evidence-mcp proof verify` CLI).
 - Sequential evidence replay and reproducibility auditing (`replayEvidenceBundle` and `evidence-mcp replay`).
-- AST structural symbol extraction and semantic diff computation (`capture_ast_evidence` tool and `evidence-mcp ast` CLI) for TypeScript, JavaScript, and Python.
+- AST structural symbol extraction and semantic diff computation (`capture_ast_evidence` tool and `evidence-mcp ast` CLI) for TypeScript, JavaScript, Python, Go, and Rust.
 - Breaking change detection flagging removed exported symbols, visibility downgrades, and added required parameters.
 - Independent verification of AST code structures in `verify_evidence_bundle` against live on-disk symbols.
 - Multi-workspace and monorepo package support (`register_workspace` tool and `additionalWorkspaces`).
@@ -597,9 +601,8 @@ npm run build
 - Interactive, responsive, offline-safe HTML report generation with multi-workspace tables, AST symbol catalogs, peer endorsements, and badges.
 - Mandatory evidence-linked assertions.
 - Live verification of file hashes, Git status, AST symbols, and cryptographic signatures.
-- Markdown, JSON, and HTML report exporting.
 
-### Out of Scope for v1.1.0
+### Out of Scope for v1.2.0
 - **Direct Arbitrary Shell Command Execution:** Raw shell strings (e.g. `bash -c "..."`) without security boundaries are strictly rejected.
 - **Remote Publishing / Cloud Syncing:** Evidence bundles are local to the workspace. There is no auto-pushing to remote cloud APIs or external issue trackers.
 
@@ -615,8 +618,9 @@ npm run build
 - **v0.8 (Completed):** Multi-agent cross-verification consensus protocol & GitHub Step Summary composite action.
 - **v0.9 (Completed):** Automated evidence policy engine & HMAC-signed audit webhooks.
 - **v1.0 (Completed):** Stable API freeze, distributed agent attestation registry, and multi-tenant bundle signing.
-- **v1.1 (Current Release):** Python AST symbol parsing, runner concurrency semaphore, `evidence-mcp init` wizard, license compliance policy rules, multi-agent consensus tutorial, and enforced registry verification.
-- **v1.2:** Structural AST parsers for Rust & Go, SARIF report export for GitHub Code Scanning, and remote notary attestations.
+- **v1.1 (Completed):** Python AST symbol parsing, runner concurrency semaphore, `evidence-mcp init` wizard, license compliance policy rules, multi-agent consensus tutorial, and enforced registry verification.
+- **v1.2 (Current Release):** Structural AST parsers & semantic diffing for Go & Rust, and SARIF v2.1.0 report export for GitHub Code Scanning.
+- **v1.3:** Remote notary attestations, Java/C# structural AST parsing, and signed SBOM bundle integration.
 
 ---
 

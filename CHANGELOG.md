@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-11-10
+
+### Added
+- **Go & Rust Structural AST Parsing & Semantic Diffing (`src/ast.ts`, PR #16):**
+  - Expanded zero-dependency AST parsing and `detectLanguage` to support Go (`.go`) and Rust (`.rs`).
+  - Implemented `parseGoSymbols` (structs, interfaces, type aliases, functions, pointer/value receiver methods, Go grouped parameter types, multi-return types, and uppercase export visibility).
+  - Implemented `parseRustSymbols` (`pub` vs private/`pub(crate)` visibility, `async fn`, `struct`, `enum`, `trait`, type aliases, `impl` methods, and balanced generic angle-bracket parameter handling via `splitTopLevelArgs`).
+  - Full integration with `computeSemanticDiff`, `captureFileAstEvidence`, `verifyEvidenceBundle`, and expanded coverage in `test/ast.test.ts` (14 tests).
+- **SARIF v2.1.0 Report Export for GitHub Code Scanning (`src/reporter.ts`, PR #17):**
+  - Implemented `formatSarifReport` generating OASIS SARIF v2.1.0 JSON mapping verification failures/stale/unverifiable items, AST breaking changes (with exact source line regions), and policy compliance violations.
+  - Extended `exportEvidenceReport`, `ExportEvidenceReportSchema`, MCP `export_evidence_report` (`format: 'sarif'`, optional `policyPath`), CLI `evidence-mcp report --format sarif [--policy <file>]`, and `action.yml` (`sarif-output`).
+  - Added dedicated test suite `test/sarif-reporter.test.ts` bringing total test suite to 176 passing tests across 18 test files.
+
 ## [1.1.0] - 2026-11-10
 
 ### Added
