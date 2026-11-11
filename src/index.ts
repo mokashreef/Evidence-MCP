@@ -16,4 +16,6 @@ export * from './policy.js';
 export * from './webhook.js';
 export * from './registry.js';
 export * from './sbom.js';
+export * from './network.js';
+export * from './notary.js';
 export { runCli, printHelp } from './cli.js';

@@ -15,6 +15,7 @@ import { verifyBundleAttestation } from './attestation.js';
 import { verifyAgentKeyStatusSync } from './registry.js';
 import { parseSourceSymbols } from './ast.js';
 import { computeSbomDigest } from './sbom.js';
+import { verifyNotaryReceipt } from './notary.js';
 
 /**
  * Re-evaluates all captured evidence inside a bundle against the workspace's current live state.
@@ -676,6 +677,37 @@ export async function verifyEvidenceBundle(bundle: EvidenceBundle): Promise<Veri
           details: `Endorsement "${endorsement.id}" (${endorsement.agentId}) failed registry check: ${registryError}`,
         });
         reasons.push(`Endorsement registry failure (${endorsement.agentId}): ${registryError}`);
+      }
+    }
+  }
+
+  // Verify Remote Transparency Notary Receipts (if attached)
+  if (bundle.notaryReceipts && bundle.notaryReceipts.length > 0) {
+    for (const receipt of bundle.notaryReceipts) {
+      const check = verifyNotaryReceipt(receipt, bundle);
+      if (check.valid) {
+        items.push({
+          id: receipt.id,
+          type: 'attestation',
+          status: 'verified',
+          details: `Remote notary receipt verified (Log #${receipt.logIndex}, Notary Key: ${receipt.notaryKeyFingerprint.slice(0, 16)}...)`,
+        });
+      } else if (check.bundleDigestMatches === false) {
+        items.push({
+          id: receipt.id,
+          type: 'attestation',
+          status: 'stale',
+          details: check.reason || `Notary receipt "${receipt.id}" is stale.`,
+        });
+        reasons.push(check.reason || `Notary receipt "${receipt.id}" digest mismatch.`);
+      } else {
+        items.push({
+          id: receipt.id,
+          type: 'attestation',
+          status: 'failed',
+          details: check.reason || `Notary receipt "${receipt.id}" signature verification failed.`,
+        });
+        reasons.push(`Notary receipt failure (${receipt.id}): ${check.reason}`);
       }
     }
   }

@@ -7,6 +7,7 @@ import {
 import { loadBundle } from './storage.js';
 import { computeBundleDigest, createVerificationProof } from './proof.js';
 import { verifyEvidenceBundle } from './verifier.js';
+import { validateHttpUrl, postJsonWithTimeout } from './network.js';
 
 /**
  * Computes an HMAC-SHA256 signature for a payload using a secret token.
@@ -61,10 +62,7 @@ export async function dispatchAuditWebhook(
 
   // Validate URL protocol
   try {
-    const parsedUrl = new URL(webhookUrl);
-    if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
-      throw new Error(`Webhook URL must use http: or https: protocol (received "${parsedUrl.protocol}").`);
-    }
+    validateHttpUrl(webhookUrl);
   } catch (err: unknown) {
     return {
       bundleId,
@@ -124,8 +122,6 @@ export async function dispatchAuditWebhook(
 
   // Prepare HTTP headers
   const requestHeaders: Record<string, string> = {
-    'Content-Type': 'application/json',
-    'User-Agent': 'Evidence-MCP/0.9.0',
     'X-Evidence-Bundle-Id': bundle.id,
     'X-Evidence-Timestamp': timestamp,
     'X-Evidence-Event': 'evidence_bundle.audit',
@@ -140,51 +136,23 @@ export async function dispatchAuditWebhook(
     requestHeaders['X-Evidence-Signature'] = signatureHeader;
   }
 
-  // Dispatch HTTP POST request with timeout
-  const controller = new AbortController();
-  const timeoutTimer = setTimeout(() => controller.abort(), timeoutMs);
+  const postRes = await postJsonWithTimeout({
+    url: webhookUrl,
+    body: payloadString,
+    headers: requestHeaders,
+    timeoutMs,
+  });
 
-  try {
-    const response = await fetch(webhookUrl, {
-      method: 'POST',
-      headers: requestHeaders,
-      body: payloadString,
-      signal: controller.signal,
-    });
-
-    clearTimeout(timeoutTimer);
-    const durationMs = Date.now() - startTime;
-    const responseBody = await response.text();
-
-    const delivered = response.ok; // 200..299
-    return {
-      bundleId: bundle.id,
-      delivered,
-      webhookUrl,
-      statusCode: response.status,
-      statusText: response.statusText,
-      responseBody: responseBody.slice(0, 2048), // cap preview
-      signatureHeader,
-      durationMs,
-      timestamp,
-      error: delivered ? undefined : `HTTP error: ${response.status} ${response.statusText}`,
-    };
-  } catch (err: unknown) {
-    clearTimeout(timeoutTimer);
-    const durationMs = Date.now() - startTime;
-    const isAbort = (err as Error).name === 'AbortError';
-    const errorMessage = isAbort
-      ? `Webhook delivery timed out after ${timeoutMs}ms.`
-      : `Network error: ${(err as Error).message}`;
-
-    return {
-      bundleId: bundle.id,
-      delivered: false,
-      webhookUrl,
-      signatureHeader,
-      durationMs,
-      timestamp,
-      error: errorMessage,
-    };
-  }
+  return {
+    bundleId: bundle.id,
+    delivered: postRes.ok,
+    webhookUrl,
+    statusCode: postRes.statusCode,
+    statusText: postRes.statusText,
+    responseBody: postRes.responseBody ? postRes.responseBody.slice(0, 2048) : undefined,
+    signatureHeader,
+    durationMs: Date.now() - startTime,
+    timestamp,
+    error: postRes.error,
+  };
 }
