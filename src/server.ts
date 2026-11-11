@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
@@ -30,6 +31,7 @@ import { createPeerEndorsement, checkBundleQuorum } from './consensus.js';
 import { evaluateEvidencePolicy, loadPolicyFile } from './policy.js';
 import { dispatchAuditWebhook } from './webhook.js';
 import { registerTrustedAgent, revokeTrustedAgent, listTrustedAgents } from './registry.js';
+import { captureWorkspaceSbom } from './sbom.js';
 import { EvidencePolicy } from './types.js';
 
 export function createEvidenceServer(): McpServer {
@@ -1261,6 +1263,90 @@ export function createEvidenceServer(): McpServer {
         return {
           isError: true,
           content: [{ type: 'text', text: `Failed to revoke trusted agent: ${message}` }],
+        };
+      }
+    }
+  );
+
+  // 20. capture_sbom_evidence
+  server.tool(
+    'capture_sbom_evidence',
+    'Generates a CycloneDX v1.5 SBOM from workspace package manifests/lockfiles and records verifiable supply-chain evidence on the bundle.',
+    {
+      bundleId: z.string().min(1).describe('The unique identifier of the evidence bundle.'),
+      workspaceName: z.string().optional().describe('Optional registered monorepo package name.'),
+      includeDevDependencies: z
+        .boolean()
+        .default(true)
+        .describe('Whether to include development dependencies in the SBOM inventory.'),
+      outputPath: z
+        .string()
+        .optional()
+        .describe('Optional relative file path within the workspace to write the CycloneDX v1.5 JSON file.'),
+      workspacePath: z.string().optional().describe('Optional workspace path hint to locate the bundle.'),
+    },
+    async ({ bundleId, workspaceName, includeDevDependencies, outputPath, workspacePath }) => {
+      try {
+        const bundle = await loadBundle(bundleId, workspacePath);
+        const targetWs = resolveWorkspaceForBundle(bundle, workspaceName);
+
+        const { evidence, cycloneDxBom } = await captureWorkspaceSbom({
+          workspacePath: targetWs,
+          workspaceName,
+          includeDevDependencies,
+        });
+
+        if (!bundle.evidence.sbom) {
+          bundle.evidence.sbom = [];
+        }
+        bundle.evidence.sbom.push(evidence);
+        await saveBundle(bundle);
+
+        let exportedFile: string | undefined;
+        if (outputPath) {
+          const resolvedOut = path.resolve(targetWs, outputPath);
+          const relOut = path.relative(path.resolve(targetWs), resolvedOut);
+          if (relOut.startsWith('..') || path.isAbsolute(relOut)) {
+            throw new Error(`Path traversal rejected: outputPath "${outputPath}" escapes workspace.`);
+          }
+          await fs.promises.mkdir(path.dirname(resolvedOut), { recursive: true });
+          const realParent = await fs.promises.realpath(path.dirname(resolvedOut));
+          const realWs = await fs.promises.realpath(path.resolve(targetWs));
+          const relRealParent = path.relative(realWs, realParent);
+          if (relRealParent.startsWith('..') || path.isAbsolute(relRealParent)) {
+            throw new Error(`Symlink escape rejected on outputPath "${outputPath}".`);
+          }
+          await fs.promises.writeFile(resolvedOut, JSON.stringify(cycloneDxBom, null, 2), 'utf8');
+          exportedFile = resolvedOut;
+        }
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  bundleId: bundle.id,
+                  evidenceId: evidence.id,
+                  format: evidence.format,
+                  manifestPath: evidence.manifestPath,
+                  lockfilePath: evidence.lockfilePath || null,
+                  componentCount: evidence.componentCount,
+                  bomDigest: evidence.bomDigest,
+                  licenseSummary: evidence.licenseSummary,
+                  exportedFile: exportedFile || null,
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `Failed to capture SBOM evidence: ${message}` }],
         };
       }
     }

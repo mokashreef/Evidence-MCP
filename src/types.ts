@@ -112,6 +112,31 @@ export interface BundleAttestation {
   signature: string;
 }
 
+export interface SbomComponent {
+  name: string;
+  version: string;
+  purl?: string;
+  scope?: 'required' | 'optional' | 'dev' | 'excluded';
+  license?: string;
+  integrity?: string;
+}
+
+export interface SbomEvidence {
+  id: string;
+  type: 'sbom';
+  capturedAt: string;
+  format: 'cyclonedx-1.5';
+  workspaceName?: string;
+  manifestPath: string;
+  manifestSha256: string;
+  lockfilePath?: string;
+  lockfileSha256?: string;
+  componentCount: number;
+  components: SbomComponent[];
+  licenseSummary: Record<string, number>;
+  bomDigest: string;
+}
+
 export interface EvidenceBundle {
   id: string;
   task: string;
@@ -128,13 +153,14 @@ export interface EvidenceBundle {
     commands?: CommandEvidence[];
     fileSnapshots?: FileSnapshotEvidence[];
     ast?: AstEvidence[];
+    sbom?: SbomEvidence[];
   };
   assertions: Assertion[];
 }
 
 export interface VerificationItemResult {
   id: string;
-  type: 'git' | 'file' | 'command' | 'assertion' | 'attestation' | 'ast';
+  type: 'git' | 'file' | 'command' | 'assertion' | 'attestation' | 'ast' | 'sbom';
   status: 'verified' | 'stale' | 'failed' | 'unverifiable' | 'recorded';
   details: string;
   target?: string;
@@ -430,6 +456,13 @@ export interface EvidencePolicyLicenseRules {
   disallowedLicenses?: string[];
 }
 
+export interface EvidencePolicySbomRules {
+  requireSbom?: boolean;
+  disallowComponentLicenses?: string[];
+  blockedPackages?: string[];
+  maxComponents?: number;
+}
+
 export interface EvidencePolicy {
   version?: '1' | '1.0';
   description?: string;
@@ -441,16 +474,35 @@ export interface EvidencePolicy {
   attestation?: EvidencePolicyAttestationRules;
   consensus?: QuorumPolicy;
   license?: EvidencePolicyLicenseRules;
+  sbom?: EvidencePolicySbomRules;
 }
 
 export interface PolicyRuleEvaluation {
   rule: string;
-  category: 'git' | 'files' | 'commands' | 'ast' | 'assertions' | 'attestation' | 'consensus' | 'license';
+  category:
+    | 'git'
+    | 'files'
+    | 'commands'
+    | 'ast'
+    | 'assertions'
+    | 'attestation'
+    | 'consensus'
+    | 'license'
+    | 'sbom';
   passed: boolean;
   message: string;
   severity: 'error' | 'warning';
   details?: Record<string, unknown>;
 }
+
+export const CaptureSbomEvidenceSchema = z.object({
+  bundleId: z.string().min(1, 'bundleId is required.'),
+  workspaceName: z.string().optional(),
+  includeDevDependencies: z.boolean().default(true),
+  outputPath: z.string().optional(),
+  workspacePath: z.string().optional(),
+});
+export type CaptureSbomEvidenceInput = z.infer<typeof CaptureSbomEvidenceSchema>;
 
 export interface PolicyEvaluationResult {
   bundleId: string;

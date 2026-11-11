@@ -14,6 +14,7 @@ import { assertSafeFilePath, SafeFilePathResult } from './security.js';
 import { verifyBundleAttestation } from './attestation.js';
 import { verifyAgentKeyStatusSync } from './registry.js';
 import { parseSourceSymbols } from './ast.js';
+import { computeSbomDigest } from './sbom.js';
 
 /**
  * Re-evaluates all captured evidence inside a bundle against the workspace's current live state.
@@ -32,7 +33,7 @@ export async function verifyEvidenceBundle(bundle: EvidenceBundle): Promise<Veri
 
   // Map to track verification status and evidence type of individual evidence IDs
   const evidenceStatusMap = new Map<string, 'verified' | 'stale' | 'failed' | 'unverifiable'>();
-  const evidenceTypeMap = new Map<string, 'git' | 'command' | 'file' | 'ast'>();
+  const evidenceTypeMap = new Map<string, 'git' | 'command' | 'file' | 'ast' | 'sbom'>();
 
   // 1. Verify Git Evidence (Independently verified against Git repository)
   if (bundle.evidence.git && bundle.evidence.git.length > 0) {
@@ -385,6 +386,133 @@ export async function verifyEvidenceBundle(bundle: EvidenceBundle): Promise<Veri
     }
   }
 
+  // 4b. Verify SBOM Evidence (Manifests, Lockfiles & Component Digest)
+  if (bundle.evidence.sbom && bundle.evidence.sbom.length > 0) {
+    for (const sbomEv of bundle.evidence.sbom) {
+      evidenceTypeMap.set(sbomEv.id, 'sbom');
+      const wsTag = sbomEv.workspaceName ? ` [workspace: ${sbomEv.workspaceName}]` : '';
+
+      let targetWs: string;
+      try {
+        targetWs = resolveWorkspaceForBundle(bundle, sbomEv.workspaceName);
+      } catch (err: unknown) {
+        items.push({
+          id: sbomEv.id,
+          type: 'sbom',
+          status: 'failed',
+          target: sbomEv.manifestPath,
+          details: `Workspace error on SBOM: ${(err as Error).message}`,
+        });
+        evidenceStatusMap.set(sbomEv.id, 'failed');
+        reasons.push(`SBOM verification failed on (${sbomEv.id}): ${(err as Error).message}`);
+        continue;
+      }
+
+      const recomputedBomDigest = computeSbomDigest(sbomEv.components);
+      if (recomputedBomDigest !== sbomEv.bomDigest) {
+        items.push({
+          id: sbomEv.id,
+          type: 'sbom',
+          status: 'failed',
+          target: sbomEv.manifestPath,
+          details: `SBOM component digest mismatch: components were altered after capture${wsTag}`,
+          expected: sbomEv.bomDigest,
+          actual: recomputedBomDigest,
+        });
+        evidenceStatusMap.set(sbomEv.id, 'failed');
+        reasons.push(`SBOM (${sbomEv.id}) failed integrity check: bomDigest mismatch.`);
+        continue;
+      }
+
+      try {
+        const manifestSafe = assertSafeFilePath(targetWs, sbomEv.manifestPath);
+        if (!fs.existsSync(manifestSafe.absolutePath)) {
+          items.push({
+            id: sbomEv.id,
+            type: 'sbom',
+            status: 'failed',
+            target: sbomEv.manifestPath,
+            details: `SBOM manifest file no longer exists on disk: ${sbomEv.manifestPath}${wsTag}`,
+          });
+          evidenceStatusMap.set(sbomEv.id, 'failed');
+          reasons.push(`SBOM manifest missing: ${sbomEv.manifestPath}`);
+          continue;
+        }
+
+        const currentManifest = await computeFileSha256AndSize(manifestSafe.absolutePath);
+        if (currentManifest.sha256 !== sbomEv.manifestSha256) {
+          items.push({
+            id: sbomEv.id,
+            type: 'sbom',
+            status: 'stale',
+            target: sbomEv.manifestPath,
+            details: `SBOM manifest modified on disk (${sbomEv.manifestPath})${wsTag}`,
+            expected: sbomEv.manifestSha256,
+            actual: currentManifest.sha256,
+          });
+          evidenceStatusMap.set(sbomEv.id, 'stale');
+          reasons.push(`SBOM (${sbomEv.id}) is stale: ${sbomEv.manifestPath} changed on disk.`);
+          continue;
+        }
+
+        let lockfileStale = false;
+        if (sbomEv.lockfilePath && sbomEv.lockfileSha256) {
+          const lockSafe = assertSafeFilePath(targetWs, sbomEv.lockfilePath);
+          if (!fs.existsSync(lockSafe.absolutePath)) {
+            lockfileStale = true;
+            items.push({
+              id: sbomEv.id,
+              type: 'sbom',
+              status: 'stale',
+              target: sbomEv.lockfilePath,
+              details: `SBOM lockfile removed from disk: ${sbomEv.lockfilePath}${wsTag}`,
+            });
+            evidenceStatusMap.set(sbomEv.id, 'stale');
+            reasons.push(`SBOM (${sbomEv.id}) is stale: ${sbomEv.lockfilePath} removed.`);
+          } else {
+            const currentLock = await computeFileSha256AndSize(lockSafe.absolutePath);
+            if (currentLock.sha256 !== sbomEv.lockfileSha256) {
+              lockfileStale = true;
+              items.push({
+                id: sbomEv.id,
+                type: 'sbom',
+                status: 'stale',
+                target: sbomEv.lockfilePath,
+                details: `SBOM lockfile modified on disk (${sbomEv.lockfilePath})${wsTag}`,
+                expected: sbomEv.lockfileSha256,
+                actual: currentLock.sha256,
+              });
+              evidenceStatusMap.set(sbomEv.id, 'stale');
+              reasons.push(`SBOM (${sbomEv.id}) is stale: ${sbomEv.lockfilePath} changed on disk.`);
+            }
+          }
+        }
+
+        if (!lockfileStale) {
+          items.push({
+            id: sbomEv.id,
+            type: 'sbom',
+            status: 'verified',
+            target: sbomEv.lockfilePath || sbomEv.manifestPath,
+            details: `CycloneDX SBOM verified (${sbomEv.componentCount} components, digest ${sbomEv.bomDigest.slice(0, 12)}...)${wsTag}`,
+          });
+          evidenceStatusMap.set(sbomEv.id, 'verified');
+        }
+      } catch (err: unknown) {
+        const msg = (err as Error).message;
+        items.push({
+          id: sbomEv.id,
+          type: 'sbom',
+          status: 'failed',
+          target: sbomEv.manifestPath,
+          details: `SBOM verification boundary error: ${msg}`,
+        });
+        evidenceStatusMap.set(sbomEv.id, 'failed');
+        reasons.push(`SBOM verification failed on "${sbomEv.manifestPath}": ${msg}`);
+      }
+    }
+  }
+
   // 5. Verify Assertions & Supporting Evidence Linkages
   if (!bundle.assertions || bundle.assertions.length === 0) {
     reasons.push('Bundle has no assertions. At least one assertion with supporting evidence is required.');
@@ -423,7 +551,7 @@ export async function verifyEvidenceBundle(bundle: EvidenceBundle): Promise<Veri
         } else if (status === 'stale') {
           staleEvidence.push(evId);
         } else if (status === 'verified') {
-          if (type === 'git' || type === 'file' || type === 'command' || type === 'ast') {
+          if (type === 'git' || type === 'file' || type === 'command' || type === 'ast' || type === 'sbom') {
             hasVerifiableEvidence = true;
           }
         }

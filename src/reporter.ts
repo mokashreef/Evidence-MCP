@@ -269,6 +269,29 @@ export function exportEvidenceReport(
     }
   }
 
+  // SBOM Evidence (CycloneDX)
+  if (bundle.evidence.sbom && bundle.evidence.sbom.length > 0) {
+    lines.push('## SBOM & Supply Chain Evidence');
+    lines.push('');
+    for (const sbom of bundle.evidence.sbom) {
+      const wsLabel = sbom.workspaceName ? ` [${sbom.workspaceName}]` : '';
+      lines.push(`### \`${sbom.id}\` (${sbom.format})${wsLabel}`);
+      lines.push(`- **Manifest:** \`${sbom.manifestPath}\` (SHA-256: \`${sbom.manifestSha256.slice(0, 16)}...\`)`);
+      if (sbom.lockfilePath) {
+        lines.push(`- **Lockfile:** \`${sbom.lockfilePath}\` (SHA-256: \`${(sbom.lockfileSha256 || '').slice(0, 16)}...\`)`);
+      }
+      lines.push(`- **Components:** ${sbom.componentCount} total`);
+      lines.push(`- **BOM Digest:** \`${sbom.bomDigest}\``);
+      const licPairs = Object.entries(sbom.licenseSummary)
+        .map(([k, v]) => `${k}: ${v}`)
+        .join(', ');
+      if (licPairs) {
+        lines.push(`- **Licenses:** ${licPairs}`);
+      }
+      lines.push('');
+    }
+  }
+
   // Verification Summary if provided
   if (verification) {
     lines.push('## Verification Details');
@@ -781,6 +804,25 @@ function generateHtmlReport(
     <h2>AST & Semantic Diff Evidence</h2>
     ${astHtml}
 
+    ${
+      bundle.evidence.sbom && bundle.evidence.sbom.length > 0
+        ? `<h2>SBOM & Supply Chain Evidence</h2>
+    <div class="card">
+      <table>
+        <thead><tr><th>ID</th><th>Format</th><th>Manifest</th><th>Components</th><th>BOM Digest</th></tr></thead>
+        <tbody>
+          ${bundle.evidence.sbom
+            .map(
+              (s) =>
+                `<tr><td><code>${escapeHtml(s.id)}</code></td><td><span class="tag">${escapeHtml(s.format)}</span></td><td><code>${escapeHtml(s.lockfilePath || s.manifestPath)}</code></td><td>${s.componentCount}</td><td><code>${escapeHtml(s.bomDigest.slice(0, 16))}...</code></td></tr>`
+            )
+            .join('')}
+        </tbody>
+      </table>
+    </div>`
+        : ''
+    }
+
     <h2>Command Executions & Records</h2>
     ${commandsHtml}
 
@@ -837,6 +879,9 @@ export function formatSarifReport(
   }
   for (const astEv of bundle.evidence.ast || []) {
     evidencePathMap.set(astEv.id, normalizeSarifUri(astEv.filePath));
+  }
+  for (const sbomEv of bundle.evidence.sbom || []) {
+    evidencePathMap.set(sbomEv.id, normalizeSarifUri(sbomEv.lockfilePath || sbomEv.manifestPath));
   }
 
   // 1. Verification findings (failed / stale / unverifiable)
@@ -972,7 +1017,11 @@ export function formatSarifReport(
       );
 
       const fallbackPolicyUri =
-        evalItem.category === 'license' ? 'package.json' : 'evidence.policy.json';
+        evalItem.category === 'license'
+          ? 'package.json'
+          : evalItem.category === 'sbom'
+          ? 'package-lock.json'
+          : 'evidence.policy.json';
 
       results.push({
         ruleId,
