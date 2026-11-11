@@ -111,6 +111,19 @@ export function getCanonicalPayload(bundle: EvidenceBundle): Buffer {
     })),
   };
 
+  if (bundle.evidence.sbom && bundle.evidence.sbom.length > 0) {
+    (canonicalObject.evidence as Record<string, unknown>).sbom = bundle.evidence.sbom.map((s) => ({
+      id: s.id,
+      format: s.format,
+      manifestPath: s.manifestPath.replace(/\\/g, '/'),
+      manifestSha256: s.manifestSha256,
+      lockfilePath: s.lockfilePath ? s.lockfilePath.replace(/\\/g, '/') : null,
+      lockfileSha256: s.lockfileSha256 || null,
+      componentCount: s.componentCount,
+      bomDigest: s.bomDigest,
+    }));
+  }
+
   const jsonString = canonicalStringify(canonicalObject);
   return Buffer.from(jsonString, 'utf8');
 }

@@ -13,6 +13,7 @@ import { generateGitHubStepSummary, writeToGitHubStepSummary } from './github-su
 import { evaluateEvidencePolicy, loadPolicyFile, initWorkspacePolicy, PolicyPreset } from './policy.js';
 import { dispatchAuditWebhook } from './webhook.js';
 import { registerTrustedAgent, revokeTrustedAgent, listTrustedAgents } from './registry.js';
+import { captureWorkspaceSbom } from './sbom.js';
 import {
   CommandEvidence,
   VerificationProof,
@@ -52,6 +53,7 @@ Usage:
   evidence-mcp registry add <agentId> <keyFile>     Register a trusted agent key in workspace
   evidence-mcp registry list [options]              List all registered agents in workspace registry
   evidence-mcp registry revoke <agentId> <reason>   Revoke a trusted agent key in registry
+  evidence-mcp sbom <bundleId> [options]            Capture CycloneDX SBOM evidence for workspace
   evidence-mcp init [options]                       Bootstrap evidence.policy.json configuration
   evidence-mcp --help, -h                           Show this help message
   evidence-mcp --version, -v                        Show version number
@@ -1230,6 +1232,73 @@ export async function runCli(args: string[]): Promise<number> {
       return 0;
     } catch (err: unknown) {
       console.error(`Init error: ${(err as Error).message}`);
+      return 1;
+    }
+  }
+
+  // 16. Command: sbom <bundleId> [options]
+  if (firstArg === 'sbom') {
+    const bundleId = args[1];
+    if (!bundleId || bundleId.startsWith('-')) {
+      console.error('Error: bundleId is required for sbom command.\nUsage: evidence-mcp sbom <bundleId> [--output bom.cdx.json] [--no-dev]');
+      return 1;
+    }
+
+    let workspace: string | undefined;
+    let workspaceName: string | undefined;
+    let outputFile: string | undefined;
+    let includeDevDependencies = true;
+
+    for (let i = 2; i < args.length; i++) {
+      if ((args[i] === '--workspace' || args[i] === '-w') && args[i + 1]) {
+        workspace = args[++i];
+      } else if ((args[i] === '--package' || args[i] === '--pkg') && args[i + 1]) {
+        workspaceName = args[++i];
+      } else if ((args[i] === '--output' || args[i] === '-o') && args[i + 1]) {
+        outputFile = args[++i];
+      } else if (args[i] === '--no-dev') {
+        includeDevDependencies = false;
+      }
+    }
+
+    try {
+      const bundle = await loadBundle(bundleId, workspace);
+      const targetWs = resolveWorkspaceForBundle(bundle, workspaceName);
+
+      const { evidence, cycloneDxBom } = await captureWorkspaceSbom({
+        workspacePath: targetWs,
+        workspaceName,
+        includeDevDependencies,
+      });
+
+      if (!bundle.evidence.sbom) {
+        bundle.evidence.sbom = [];
+      }
+      bundle.evidence.sbom.push(evidence);
+      await saveBundle(bundle);
+
+      console.log(`\nCycloneDX SBOM Captured: ${evidence.id}`);
+      console.log('='.repeat(80));
+      console.log(`Bundle ID:   ${bundle.id}`);
+      console.log(`Manifest:    ${evidence.manifestPath}`);
+      if (evidence.lockfilePath) {
+        console.log(`Lockfile:    ${evidence.lockfilePath}`);
+      }
+      console.log(`Components:  ${evidence.componentCount}`);
+      console.log(`BOM Digest:  ${evidence.bomDigest}`);
+      console.log('='.repeat(80));
+
+      if (outputFile) {
+        const resolvedOut = path.resolve(outputFile);
+        await fs.promises.mkdir(path.dirname(resolvedOut), { recursive: true });
+        await fs.promises.writeFile(resolvedOut, JSON.stringify(cycloneDxBom, null, 2), 'utf8');
+        console.log(`CycloneDX JSON written to: ${resolvedOut}`);
+      }
+
+      console.log('');
+      return 0;
+    } catch (err: unknown) {
+      console.error(`SBOM error: ${(err as Error).message}`);
       return 1;
     }
   }

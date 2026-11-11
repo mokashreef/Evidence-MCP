@@ -832,6 +832,122 @@ export function evaluateEvidencePolicy(options: {
     }
   }
 
+  // 9. SBOM Compliance Rules
+  if (policy.sbom) {
+    const sbomList = bundle.evidence.sbom || [];
+    const { requireSbom, disallowComponentLicenses, blockedPackages, maxComponents } = policy.sbom;
+
+    if (requireSbom) {
+      if (sbomList.length === 0) {
+        evaluations.push({
+          rule: 'sbom.requireSbom',
+          category: 'sbom',
+          passed: false,
+          severity: 'error',
+          message: 'Policy requires CycloneDX SBOM evidence, but none was recorded in this bundle.',
+        });
+      } else {
+        evaluations.push({
+          rule: 'sbom.requireSbom',
+          category: 'sbom',
+          passed: true,
+          severity: 'error',
+          message: `Bundle includes ${sbomList.length} SBOM snapshot(s).`,
+        });
+      }
+    }
+
+    if (disallowComponentLicenses && disallowComponentLicenses.length > 0 && sbomList.length > 0) {
+      const lowerDisallowed = disallowComponentLicenses.map((l) => l.toLowerCase());
+      const violations: Array<{ name: string; version: string; license: string }> = [];
+
+      for (const sbomEv of sbomList) {
+        for (const comp of sbomEv.components) {
+          if (comp.license && lowerDisallowed.includes(comp.license.toLowerCase())) {
+            violations.push({ name: comp.name, version: comp.version, license: comp.license });
+          }
+        }
+      }
+
+      if (violations.length > 0) {
+        evaluations.push({
+          rule: 'sbom.disallowComponentLicenses',
+          category: 'sbom',
+          passed: false,
+          severity: 'error',
+          message: `SBOM contains ${violations.length} dependency component(s) with disallowed licenses: ${violations
+            .slice(0, 5)
+            .map((v) => `${v.name}@${v.version} (${v.license})`)
+            .join(', ')}`,
+          details: { violations },
+        });
+      } else {
+        evaluations.push({
+          rule: 'sbom.disallowComponentLicenses',
+          category: 'sbom',
+          passed: true,
+          severity: 'error',
+          message: 'All SBOM component licenses are compliant with policy.',
+        });
+      }
+    }
+
+    if (blockedPackages && blockedPackages.length > 0 && sbomList.length > 0) {
+      const lowerBlocked = blockedPackages.map((p) => p.toLowerCase());
+      const matched: string[] = [];
+
+      for (const sbomEv of sbomList) {
+        for (const comp of sbomEv.components) {
+          const id = `${comp.name}@${comp.version}`.toLowerCase();
+          if (lowerBlocked.includes(comp.name.toLowerCase()) || lowerBlocked.includes(id)) {
+            matched.push(`${comp.name}@${comp.version}`);
+          }
+        }
+      }
+
+      if (matched.length > 0) {
+        evaluations.push({
+          rule: 'sbom.blockedPackages',
+          category: 'sbom',
+          passed: false,
+          severity: 'error',
+          message: `SBOM includes blocked package(s): [${matched.join(', ')}]`,
+          details: { blockedFound: matched },
+        });
+      } else {
+        evaluations.push({
+          rule: 'sbom.blockedPackages',
+          category: 'sbom',
+          passed: true,
+          severity: 'error',
+          message: 'No blocked packages found in recorded SBOMs.',
+        });
+      }
+    }
+
+    if (typeof maxComponents === 'number' && sbomList.length > 0) {
+      const exceeding = sbomList.filter((s) => s.componentCount > maxComponents);
+      if (exceeding.length > 0) {
+        evaluations.push({
+          rule: 'sbom.maxComponents',
+          category: 'sbom',
+          passed: false,
+          severity: 'warning',
+          message: `SBOM exceeds maximum allowed components (${exceeding[0].componentCount} > ${maxComponents}).`,
+          details: { maxComponents, observed: exceeding[0].componentCount },
+        });
+      } else {
+        evaluations.push({
+          rule: 'sbom.maxComponents',
+          category: 'sbom',
+          passed: true,
+          severity: 'warning',
+          message: `SBOM component count within limit (${maxComponents}).`,
+        });
+      }
+    }
+  }
+
   const rulesEvaluated = evaluations.length;
   const passedCount = evaluations.filter((e) => e.passed).length;
   const failedCount = evaluations.filter((e) => !e.passed && e.severity === 'error').length;
