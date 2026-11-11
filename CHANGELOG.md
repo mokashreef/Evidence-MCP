@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-11-11
+
+### Added
+- **Java & C# Structural AST Parsing & Semantic Diffing (`src/ast.ts`, PR #22):**
+  - Expanded zero-dependency AST parsing and `detectLanguage` to support Java (`.java`) and C# (`.cs`).
+  - Added unified brace-scoped parser `parseJvmClrSymbols` and `parseTypedBeforeNameParameters` handling classes, interfaces, enums, records, C# structs, namespaces, constructors, `async` modifiers, default parameter values, nested generic types (`Map<String, List<Integer>>`, `Dictionary<string, List<int>>`), and annotations/attributes.
+  - Expanded `test/ast.test.ts` to 16 passing tests.
+- **Signed CycloneDX v1.5 SBOM Integration (`src/sbom.ts`, PR #23):**
+  - Zero-dependency dependency inventory and CycloneDX v1.5 SBOM capture (`captureWorkspaceSbom`, `generateCycloneDxDocument`, `computeSbomDigest`, `buildNpmPurl`) parsing `package.json` and `package-lock.json` (lockfile v1/v2/v3).
+  - Conditional canonical payload binding (`getCanonicalPayload`) locking SBOM digests into Ed25519 bundle attestations without breaking existing bundle digests.
+  - Live disk verification of manifest/lockfile SHA-256 hashes and component digest integrity in `verifyEvidenceBundle`.
+  - New `EvidencePolicy.sbom` compliance rules (`requireSbom`, `disallowComponentLicenses`, `blockedPackages`, `maxComponents`) and SARIF/Markdown/HTML reporting integration.
+  - New MCP tool `capture_sbom_evidence` (Tool 20) and CLI command `evidence-mcp sbom <bundleId> [--output <bom.cdx.json>] [--no-dev]`.
+- **Remote Transparency Notary Attestations (`src/notary.ts`, PR #24):**
+  - Shared `postJsonWithTimeout` and `validateHttpUrl` network layer (`src/network.ts`) powering both webhooks and remote notary requests.
+  - Anchors only anonymized `bundleDigest`, `bundleId`, and optional `authorKeyFingerprint` (`notarizeEvidenceBundle`) to HTTP/HTTPS transparency logs with zero workspace file or secret leakage.
+  - Cryptographic Ed25519 receipt verification (`verifyNotaryReceipt`, `signNotaryAttestationPayload`) verified on receipt arrival, inside `verifyEvidenceBundle`, and enforced via `attestation.requireNotary` + `attestation.allowedNotaryFingerprints`.
+  - New MCP tool `notarize_evidence_bundle` (Tool 21) and CLI command `evidence-mcp notarize <bundleId> <notaryUrl> [--token <token>]`.
+  - Expanded total test suite to 186 passing tests across 20 test files (100% green).
+
 ## [1.2.0] - 2026-11-10
 
 ### Added
