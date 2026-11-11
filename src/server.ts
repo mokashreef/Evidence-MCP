@@ -32,6 +32,7 @@ import { evaluateEvidencePolicy, loadPolicyFile } from './policy.js';
 import { dispatchAuditWebhook } from './webhook.js';
 import { registerTrustedAgent, revokeTrustedAgent, listTrustedAgents } from './registry.js';
 import { captureWorkspaceSbom } from './sbom.js';
+import { notarizeEvidenceBundle } from './notary.js';
 import { EvidencePolicy } from './types.js';
 
 export function createEvidenceServer(): McpServer {
@@ -1347,6 +1348,59 @@ export function createEvidenceServer(): McpServer {
         return {
           isError: true,
           content: [{ type: 'text', text: `Failed to capture SBOM evidence: ${message}` }],
+        };
+      }
+    }
+  );
+
+  // 21. notarize_evidence_bundle
+  server.tool(
+    'notarize_evidence_bundle',
+    'Anchors only the anonymized bundle SHA-256 digest to a remote transparency notary service and stores the signed Ed25519 receipt.',
+    {
+      bundleId: z.string().min(1).describe('The unique identifier of the evidence bundle.'),
+      notaryUrl: z.string().url().describe('HTTP or HTTPS URL of the transparency notary service.'),
+      authToken: z.string().optional().describe('Optional Bearer authentication token for the notary endpoint.'),
+      timeoutMs: z.number().int().min(500).max(60000).optional().describe('Optional HTTP timeout in ms.'),
+      workspacePath: z.string().optional().describe('Optional workspace path hint.'),
+    },
+    async ({ bundleId, notaryUrl, authToken, timeoutMs, workspacePath }) => {
+      try {
+        const res = await notarizeEvidenceBundle({
+          bundleId,
+          notaryUrl,
+          authToken,
+          timeoutMs,
+          workspacePath,
+        });
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  bundleId,
+                  receiptId: res.receipt.id,
+                  bundleDigest: res.bundleDigest,
+                  notaryUrl: res.receipt.notaryUrl,
+                  notaryKeyFingerprint: res.receipt.notaryKeyFingerprint,
+                  logIndex: res.receipt.logIndex,
+                  merkleLeafHash: res.receipt.merkleLeafHash,
+                  notarizedAt: res.receipt.notarizedAt,
+                  durationMs: res.durationMs,
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `Failed to notarize evidence bundle: ${message}` }],
         };
       }
     }

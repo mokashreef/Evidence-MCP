@@ -14,6 +14,7 @@ import { evaluateEvidencePolicy, loadPolicyFile, initWorkspacePolicy, PolicyPres
 import { dispatchAuditWebhook } from './webhook.js';
 import { registerTrustedAgent, revokeTrustedAgent, listTrustedAgents } from './registry.js';
 import { captureWorkspaceSbom } from './sbom.js';
+import { notarizeEvidenceBundle } from './notary.js';
 import {
   CommandEvidence,
   VerificationProof,
@@ -54,6 +55,7 @@ Usage:
   evidence-mcp registry list [options]              List all registered agents in workspace registry
   evidence-mcp registry revoke <agentId> <reason>   Revoke a trusted agent key in registry
   evidence-mcp sbom <bundleId> [options]            Capture CycloneDX SBOM evidence for workspace
+  evidence-mcp notarize <bundleId> <notaryUrl>      Anchor bundle digest to a remote transparency notary
   evidence-mcp init [options]                       Bootstrap evidence.policy.json configuration
   evidence-mcp --help, -h                           Show this help message
   evidence-mcp --version, -v                        Show version number
@@ -1299,6 +1301,57 @@ export async function runCli(args: string[]): Promise<number> {
       return 0;
     } catch (err: unknown) {
       console.error(`SBOM error: ${(err as Error).message}`);
+      return 1;
+    }
+  }
+
+  // 17. Command: notarize <bundleId> <notaryUrl> [options]
+  if (firstArg === 'notarize') {
+    const bundleId = args[1];
+    const notaryUrl = args[2];
+    if (!bundleId || !notaryUrl || bundleId.startsWith('-') || notaryUrl.startsWith('-')) {
+      console.error('Error: bundleId and notaryUrl are required for "notarize" command.');
+      console.error('Usage: evidence-mcp notarize <bundleId> <notaryUrl> [--token <token>] [--timeout <ms>]');
+      return 1;
+    }
+
+    let authToken: string | undefined;
+    let timeoutMs = 10000;
+    let workspace: string | undefined;
+
+    for (let i = 3; i < args.length; i++) {
+      if ((args[i] === '--token' || args[i] === '-t') && args[i + 1]) {
+        authToken = args[++i];
+      } else if (args[i] === '--timeout' && args[i + 1]) {
+        timeoutMs = parseInt(args[++i], 10);
+      } else if ((args[i] === '--workspace' || args[i] === '-w') && args[i + 1]) {
+        workspace = args[++i];
+      }
+    }
+
+    try {
+      const res = await notarizeEvidenceBundle({
+        bundleId,
+        notaryUrl,
+        authToken,
+        timeoutMs,
+        workspacePath: workspace,
+      });
+
+      console.log(`\nRemote Transparency Notarization: ${bundleId}`);
+      console.log('='.repeat(80));
+      console.log(`Receipt ID:    ${res.receipt.id}`);
+      console.log(`Notary URL:    ${res.receipt.notaryUrl}`);
+      console.log(`Log Index:     #${res.receipt.logIndex}`);
+      console.log(`Notary Key:    ${res.receipt.notaryKeyFingerprint}`);
+      console.log(`Bundle Digest: ${res.bundleDigest}`);
+      console.log(`Merkle Leaf:   ${res.receipt.merkleLeafHash}`);
+      console.log(`Timestamp:     ${res.receipt.notarizedAt}`);
+      console.log(`Duration:      ${res.durationMs}ms`);
+      console.log('='.repeat(80) + '\n');
+      return 0;
+    } catch (err: unknown) {
+      console.error(`Notarization error: ${(err as Error).message}`);
       return 1;
     }
   }

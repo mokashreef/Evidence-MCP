@@ -137,6 +137,21 @@ export interface SbomEvidence {
   bomDigest: string;
 }
 
+export interface NotaryReceipt {
+  id: string;
+  bundleId: string;
+  bundleDigest: string;
+  notaryUrl: string;
+  notaryPublicKeyPem: string;
+  notaryKeyFingerprint: string;
+  algorithm: 'ed25519';
+  logIndex: number;
+  merkleLeafHash: string;
+  notarizedAt: string;
+  signature: string;
+  authorKeyFingerprint?: string;
+}
+
 export interface EvidenceBundle {
   id: string;
   task: string;
@@ -148,6 +163,7 @@ export interface EvidenceBundle {
   metadata?: Record<string, unknown>;
   attestation?: BundleAttestation;
   endorsements?: PeerEndorsement[];
+  notaryReceipts?: NotaryReceipt[];
   evidence: {
     git?: GitEvidence[];
     commands?: CommandEvidence[];
@@ -448,7 +464,18 @@ export interface EvidencePolicyAttestationRules {
   requireSignature?: boolean;
   allowedFingerprints?: string[];
   requireTrustedRegistry?: boolean;
+  requireNotary?: boolean;
+  allowedNotaryFingerprints?: string[];
 }
+
+export const NotarizeEvidenceBundleSchema = z.object({
+  bundleId: z.string().min(1, 'bundleId is required.'),
+  notaryUrl: z.string().url('notaryUrl must be a valid URL.'),
+  authToken: z.string().optional(),
+  timeoutMs: z.number().int().min(500).max(60000).optional(),
+  workspacePath: z.string().optional(),
+});
+export type NotarizeEvidenceBundleInput = z.infer<typeof NotarizeEvidenceBundleSchema>;
 
 export interface EvidencePolicyLicenseRules {
   requireLicenseField?: boolean;

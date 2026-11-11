@@ -84,6 +84,13 @@ export function exportEvidenceReport(
       `**Verification Proof:** 🛡️ \`${proof.id}\` (Verdict: \`${proof.verdict.toUpperCase()}\`, Signer: \`${proof.signer.keyFingerprint.slice(0, 16)}...\`)`
     );
   }
+  if (bundle.notaryReceipts && bundle.notaryReceipts.length > 0) {
+    for (const nr of bundle.notaryReceipts) {
+      lines.push(
+        `**Remote Notary Receipt:** 🌐 \`${nr.id}\` (Log #${nr.logIndex}, Notary: \`${nr.notaryKeyFingerprint.slice(0, 16)}...\`, At: \`${nr.notarizedAt}\`)`
+      );
+    }
+  }
   lines.push('');
 
   // Registered Workspaces (if multi-workspace)

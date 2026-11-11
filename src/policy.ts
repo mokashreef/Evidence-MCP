@@ -10,6 +10,7 @@ import {
 import { checkBundleQuorum } from './consensus.js';
 import { verifyBundleAttestation } from './attestation.js';
 import { verifyAgentKeyStatusSync, RegistryVerificationStatus } from './registry.js';
+import { verifyNotaryReceipt } from './notary.js';
 
 /**
  * Matches a relative or absolute file path against a glob-like pattern.
@@ -681,6 +682,56 @@ export function evaluateEvidencePolicy(options: {
         severity: 'error',
         message: `Signer key rejected by workspace agent registry: ${inactiveRegistryReason}`,
       });
+    }
+
+    if (policy.attestation.requireNotary || (policy.attestation.allowedNotaryFingerprints && policy.attestation.allowedNotaryFingerprints.length > 0)) {
+      const receipts = bundle.notaryReceipts || [];
+      const validReceipts = receipts.filter((r) => verifyNotaryReceipt(r, bundle).valid);
+
+      if (policy.attestation.requireNotary) {
+        if (validReceipts.length === 0) {
+          evaluations.push({
+            rule: 'attestation.requireNotary',
+            category: 'attestation',
+            passed: false,
+            severity: 'error',
+            message:
+              receipts.length === 0
+                ? 'Policy requires remote transparency notary receipt, but none is attached.'
+                : 'Attached notary receipt(s) failed signature or bundle digest verification.',
+          });
+        } else {
+          evaluations.push({
+            rule: 'attestation.requireNotary',
+            category: 'attestation',
+            passed: true,
+            severity: 'error',
+            message: `Verified ${validReceipts.length} remote notary receipt(s) matching current bundle digest.`,
+          });
+        }
+      }
+
+      if (policy.attestation.allowedNotaryFingerprints && policy.attestation.allowedNotaryFingerprints.length > 0) {
+        const allowed = policy.attestation.allowedNotaryFingerprints;
+        const authorized = validReceipts.filter((r) => allowed.includes(r.notaryKeyFingerprint));
+        if (authorized.length === 0) {
+          evaluations.push({
+            rule: 'attestation.allowedNotaryFingerprints',
+            category: 'attestation',
+            passed: false,
+            severity: 'error',
+            message: `No valid remote notary receipt signed by allowed notary fingerprint(s): [${allowed.join(', ')}].`,
+          });
+        } else {
+          evaluations.push({
+            rule: 'attestation.allowedNotaryFingerprints',
+            category: 'attestation',
+            passed: true,
+            severity: 'error',
+            message: `Remote notary receipt authorized by trusted notary key (${authorized[0].notaryKeyFingerprint}).`,
+          });
+        }
+      }
     }
   }
 
