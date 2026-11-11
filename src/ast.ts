@@ -32,6 +32,10 @@ export function detectLanguage(filePath: string): string {
       return 'go';
     case '.rs':
       return 'rust';
+    case '.java':
+      return 'java';
+    case '.cs':
+      return 'csharp';
     default:
       return 'other';
   }
@@ -234,6 +238,10 @@ export function parseSourceSymbols(sourceCode: string, filePath: string): AstSym
 
   if (lang === 'rust') {
     return parseRustSymbols(sourceCode);
+  }
+
+  if (lang === 'java' || lang === 'csharp') {
+    return parseJvmClrSymbols(sourceCode, lang);
   }
 
   return [];
@@ -925,6 +933,350 @@ function parseRustSymbols(sourceCode: string): AstSymbol[] {
     if (currentContainer && braceDepth <= containerDepth) {
       currentContainer = '';
       containerDepth = -1;
+    }
+  }
+
+  return symbols;
+}
+
+const JVM_CLR_MODIFIERS = new Set([
+  'public',
+  'private',
+  'protected',
+  'internal',
+  'static',
+  'abstract',
+  'sealed',
+  'final',
+  'partial',
+  'readonly',
+  'virtual',
+  'override',
+  'async',
+  'extern',
+  'unsafe',
+  'synchronized',
+  'native',
+  'strictfp',
+  'default',
+  'new',
+]);
+
+const JVM_CLR_CONTROL_FLOW = new Set([
+  'if',
+  'else',
+  'for',
+  'foreach',
+  'while',
+  'do',
+  'switch',
+  'case',
+  'catch',
+  'try',
+  'finally',
+  'using',
+  'lock',
+  'synchronized',
+  'return',
+  'throw',
+  'new',
+  'yield',
+]);
+
+/**
+ * Strips leading Java annotations (@Attr(...)) or C# attributes ([Attr(...)]) from a declaration fragment.
+ */
+function stripLeadingAnnotationsOrAttrs(input: string): string {
+  let s = input.trim();
+  while (s.length > 0) {
+    if (s.startsWith('@')) {
+      const m = s.match(/^@[A-Za-z0-9_.]+/);
+      if (!m) break;
+      let nextPos = m[0].length;
+      if (s[nextPos] === '(') {
+        const group = extractBalancedParens(s, nextPos);
+        if (group) nextPos = group.closeIdx + 1;
+      }
+      s = s.slice(nextPos).trim();
+    } else if (s.startsWith('[')) {
+      let depth = 0;
+      let inQuote: string | null = null;
+      let endIdx = -1;
+      for (let i = 0; i < s.length; i++) {
+        const ch = s[i];
+        if (inQuote) {
+          if (ch === inQuote && s[i - 1] !== '\\') inQuote = null;
+          continue;
+        }
+        if (ch === '"' || ch === "'") {
+          inQuote = ch;
+          continue;
+        }
+        if (ch === '[') depth++;
+        else if (ch === ']') {
+          depth--;
+          if (depth === 0) {
+            endIdx = i;
+            break;
+          }
+        }
+      }
+      if (endIdx === -1) break;
+      s = s.slice(endIdx + 1).trim();
+    } else {
+      break;
+    }
+  }
+  return s;
+}
+
+/**
+ * Parses Java/C# Type-before-name parameters (e.g. "@NotNull Map<String, List<int>> items, bool strict = true").
+ */
+function parseTypedBeforeNameParameters(rawParams: string): AstParameter[] {
+  const segments = splitTopLevelArgs(rawParams);
+  if (segments.length === 0) return [];
+
+  const params: AstParameter[] = [];
+  for (const rawSeg of segments) {
+    const cleaned = stripLeadingAnnotationsOrAttrs(rawSeg);
+    if (!cleaned) continue;
+
+    // Extract optional default value on top-level '='
+    let eqIdx = -1;
+    let depthAngle = 0;
+    let depthParen = 0;
+    let inQuote: string | null = null;
+    for (let i = 0; i < cleaned.length; i++) {
+      const ch = cleaned[i];
+      const prev = cleaned[i - 1];
+      if (inQuote) {
+        if (ch === inQuote && prev !== '\\') inQuote = null;
+        continue;
+      }
+      if (ch === '"' || ch === "'" || ch === '`') {
+        inQuote = ch;
+        continue;
+      }
+      if (ch === '(') depthParen++;
+      else if (ch === ')' && depthParen > 0) depthParen--;
+      else if (ch === '<') depthAngle++;
+      else if (ch === '>' && prev !== '=' && prev !== '-' && depthAngle > 0) depthAngle--;
+      else if (ch === '=' && depthAngle === 0 && depthParen === 0 && cleaned[i + 1] !== '>') {
+        eqIdx = i;
+        break;
+      }
+    }
+
+    const defaultValue = eqIdx !== -1 ? cleaned.slice(eqIdx + 1).trim() : undefined;
+    let declPart = (eqIdx !== -1 ? cleaned.slice(0, eqIdx) : cleaned).trim();
+
+    // Strip Java/C# parameter passing modifiers (final, ref, out, in, params, this)
+    declPart = declPart.replace(/^(?:(?:final|ref|out|in|params|this)\s+)+/, '').trim();
+
+    const lastSpaceIdx = declPart.search(/\s+(?=[A-Za-z0-9_]+$)/);
+    if (lastSpaceIdx !== -1) {
+      const type = declPart.slice(0, lastSpaceIdx).trim();
+      const name = declPart.slice(lastSpaceIdx).trim();
+      params.push({
+        name,
+        type,
+        optional: defaultValue !== undefined,
+        defaultValue,
+      });
+    } else if (declPart) {
+      params.push({
+        name: declPart,
+        optional: defaultValue !== undefined,
+        defaultValue,
+      });
+    }
+  }
+
+  return params;
+}
+
+/**
+ * Parses Java (.java) and C# (.cs) structural AST symbols uniformly using brace-depth scoping.
+ */
+function parseJvmClrSymbols(sourceCode: string, variant: 'java' | 'csharp'): AstSymbol[] {
+  const symbols: AstSymbol[] = [];
+  const lines = sourceCode.split('\n');
+  let inBlockComment = false;
+  let braceDepth = 0;
+
+  const containerStack: Array<{
+    name: string;
+    kind: AstSymbolKind;
+    enterDepth: number;
+    isExported: boolean;
+  }> = [];
+
+  const typeDeclRegex =
+    /^((?:(?:public|private|protected|internal|abstract|sealed|static|final|partial|readonly|ref)\s+)*)(class|interface|enum|record|struct)\s+([A-Za-z0-9_]+)/;
+
+  for (let i = 0; i < lines.length; i++) {
+    const { text: rawClean, inBlockComment: nextBlock } = stripCStyleComments(
+      lines[i],
+      inBlockComment
+    );
+    inBlockComment = nextBlock;
+
+    if (!rawClean) continue;
+    const prevDepth = braceDepth;
+    const netBraces = countNetBraces(rawClean);
+    const lineNum = i + 1;
+
+    const line = stripLeadingAnnotationsOrAttrs(rawClean);
+
+    const isMetadataDirective =
+      !line ||
+      line.startsWith('package ') ||
+      line.startsWith('import ') ||
+      line.startsWith('using ') ||
+      line.startsWith('namespace ');
+
+    if (!isMetadataDirective) {
+      const typeMatch = line.match(typeDeclRegex);
+      const currentContainer = containerStack[containerStack.length - 1];
+
+      if (typeMatch) {
+        const modTokens = (typeMatch[1] || '').trim().split(/\s+/).filter(Boolean);
+        const rawKind = typeMatch[2];
+        const name = typeMatch[3];
+        const isExported = modTokens.includes('public');
+
+        const kind: AstSymbolKind =
+          rawKind === 'interface'
+            ? 'interface'
+            : rawKind === 'enum'
+            ? 'enum'
+            : 'class';
+
+        const fullName = currentContainer ? `${currentContainer.name}.${name}` : name;
+
+        let signature = `${modTokens.length > 0 ? modTokens.join(' ') + ' ' : ''}${rawKind} ${name}`;
+        let parameters: AstParameter[] | undefined;
+
+        // Handle Java/C# record primary constructor parameters: public record UserDto(string Id, string Email)
+        if (rawKind === 'record') {
+          const openParen = line.indexOf('(', typeMatch[0].length);
+          const beforeBrace = line.indexOf('{');
+          if (openParen !== -1 && (beforeBrace === -1 || openParen < beforeBrace)) {
+            const group = extractBalancedParens(line, openParen);
+            if (group) {
+              parameters = parseTypedBeforeNameParameters(group.content);
+              signature += `(${parameters.map((p) => (p.type ? `${p.type} ${p.name}` : p.name)).join(', ')})`;
+            }
+          }
+        }
+
+        symbols.push({
+          name: fullName,
+          kind,
+          isExported,
+          parameters,
+          signature,
+          startLine: lineNum,
+          endLine: lineNum,
+        });
+
+        if (netBraces > 0) {
+          containerStack.push({
+            name: fullName,
+            kind,
+            enterDepth: prevDepth,
+            isExported,
+          });
+        }
+      } else if (currentContainer) {
+        // Parse methods and constructors inside active class/interface/struct/record
+        const openParenIdx = line.indexOf('(');
+        const firstEqIdx = line.indexOf('=');
+        const beforeBodyIdx = line.search(/[\{;]|=>/);
+
+        const isMethodCandidate =
+          openParenIdx > 0 &&
+          (beforeBodyIdx === -1 || openParenIdx < beforeBodyIdx) &&
+          (firstEqIdx === -1 || openParenIdx < firstEqIdx);
+
+        if (isMethodCandidate) {
+          const leftSideRaw = line.slice(0, openParenIdx).trim();
+          // Strip generic method parameters immediately before '(' e.g. Verify<T> -> Verify
+          const leftSide = leftSideRaw.replace(/<[^<>]*>\s*$/, '').trim();
+          const tokens = leftSide.split(/\s+/).filter(Boolean);
+
+          const methodName = tokens[tokens.length - 1];
+          if (
+            methodName &&
+            /^[A-Za-z0-9_]+$/.test(methodName) &&
+            !JVM_CLR_CONTROL_FLOW.has(methodName)
+          ) {
+            let idx = 0;
+            const mods: string[] = [];
+            while (idx < tokens.length - 1 && JVM_CLR_MODIFIERS.has(tokens[idx])) {
+              mods.push(tokens[idx]);
+              idx++;
+            }
+
+            const returnTypeTokens = tokens.slice(idx, tokens.length - 1);
+            const returnType =
+              returnTypeTokens.length > 0 ? returnTypeTokens.join(' ') : undefined;
+            const isConstructor =
+              !returnType &&
+              methodName === currentContainer.name.split('.').pop();
+
+            if (returnType || isConstructor) {
+              const paramGroup = extractBalancedParens(line, openParenIdx);
+              if (paramGroup) {
+                const params = parseTypedBeforeNameParameters(paramGroup.content);
+                const isExplicitNonPublic =
+                  mods.includes('private') ||
+                  mods.includes('protected') ||
+                  mods.includes('internal');
+
+                // Interface methods without explicit private/protected are implicitly public
+                const isExported =
+                  currentContainer.kind === 'interface'
+                    ? currentContainer.isExported && !isExplicitNonPublic
+                    : mods.includes('public');
+
+                const isAsync = mods.includes('async');
+                const fullName = `${currentContainer.name}.${methodName}`;
+                const paramSig = params
+                  .map(
+                    (p) =>
+                      `${p.type ? `${p.type} ` : ''}${p.name}${p.defaultValue !== undefined ? ` = ${p.defaultValue}` : ''}`
+                  )
+                  .join(', ');
+                const visPrefix = mods.length > 0 ? `${mods.join(' ')} ` : '';
+                const retPrefix = returnType ? `${returnType} ` : '';
+                const signature = `${visPrefix}${retPrefix}${methodName}(${paramSig})`;
+
+                symbols.push({
+                  name: fullName,
+                  kind: 'method',
+                  isExported,
+                  isAsync: variant === 'csharp' ? isAsync : undefined,
+                  parameters: params,
+                  returnType,
+                  signature,
+                  startLine: lineNum,
+                  endLine: lineNum,
+                });
+              }
+            }
+          }
+        }
+      }
+    }
+
+    braceDepth += netBraces;
+    while (
+      containerStack.length > 0 &&
+      braceDepth <= containerStack[containerStack.length - 1].enterDepth
+    ) {
+      containerStack.pop();
     }
   }
 
