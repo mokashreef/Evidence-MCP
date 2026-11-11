@@ -100,16 +100,16 @@ All data is stored locally in human-readable JSON files inside the workspace roo
 
 ---
 
-## Tools Catalog (v1.2.0)
+## Tools Catalog (v1.3.0)
 
-Evidence MCP provides nineteen focused tools through the Model Context Protocol:
+Evidence MCP provides twenty-one focused tools through the Model Context Protocol:
 
 | Tool | Purpose | Key Inputs | Output |
 |---|---|---|---|
 | `create_evidence_bundle` | Initializes a new evidence bundle for a task | `task`, `workspacePath`, `metadata?`, `additionalWorkspaces?` | `bundleId`, initial status (`in_progress`) |
 | `register_workspace` | Dynamically binds a named monorepo package or secondary repository | `bundleId`, `name`, `path` | `workspaceName`, `workspacePath`, `allWorkspaces` |
 | `capture_git_evidence` | Safely records Git HEAD, branch, and status in targeted workspace | `bundleId`, `workspaceName?`, `workspacePath?` | `evidenceId`, `branch`, `headCommit`, `isClean` |
-| `capture_ast_evidence` | Extracts TypeScript/JavaScript/Python/Go/Rust AST symbols and computes semantic diffs | `bundleId`, `files`, `workspaceName?`, `compareWithGitHead?` | `astEvidence: [{ id, filePath, symbolsCount, hasSemanticChanges, isBreakingChange }]` |
+| `capture_ast_evidence` | Extracts TypeScript/JavaScript/Python/Go/Rust/Java/C# AST symbols and semantic diffs | `bundleId`, `files`, `workspaceName?`, `compareWithGitHead?` | `astEvidence: [{ id, filePath, symbolsCount, hasSemanticChanges, isBreakingChange }]` |
 | `execute_verified_command` | Spawns an approved command in sandboxed runner with concurrency bounds | `bundleId`, `command`, `args?`, `cwd?`, `workspaceName?` | `evidenceId`, `exitCode`, `durationMs`, `provenance: server_executed` |
 | `record_command_result` | Logs agent-reported command execution result (provenance: agent_reported) | `bundleId`, `command`, `exitCode`, `stdout`, `stderr`, `workspaceName?` | `evidenceId`, `command`, `exitCode`, `provenance` |
 | `snapshot_files` | Computes SHA-256 and size for regular files inside workspace boundary | `bundleId`, `paths`, `workspaceName?` | `snapshots: [{ evidenceId, workspaceName, path, sha256 }]` |
@@ -125,6 +125,8 @@ Evidence MCP provides nineteen focused tools through the Model Context Protocol:
 | `dispatch_webhook_audit` | Dispatches an HMAC-SHA256 authenticated audit payload to a webhook URL | `bundleId`, `webhookUrl`, `secretToken?`, `includeProof?`, `headers?`, `timeoutMs?` | `delivered` (boolean), `statusCode`, `signatureHeader`, `durationMs` |
 | `register_trusted_agent` | Registers an authorized agent public key and role in the workspace registry | `agentId`, `name`, `role`, `publicKeyPem`, `expiresAt?`, `metadata?` | `agentId`, `name`, `role`, `keyFingerprint`, `status`, `registeredAt` |
 | `revoke_trusted_agent` | Revokes a trusted agent key in the registry with an audit reason | `agentId`, `reason`, `workspacePath?` | `agentId`, `status: 'revoked'`, `revokedAt`, `revocationReason` |
+| `capture_sbom_evidence` | Generates a verifiable CycloneDX v1.5 SBOM from manifests/lockfiles | `bundleId`, `workspaceName?`, `includeDevDependencies?`, `outputPath?` | `evidenceId`, `componentCount`, `bomDigest`, `licenseSummary` |
+| `notarize_evidence_bundle` | Anchors anonymized bundle SHA-256 digest to a remote transparency notary | `bundleId`, `notaryUrl`, `authToken?`, `timeoutMs?` | `receiptId`, `logIndex`, `merkleLeafHash`, `notaryKeyFingerprint` |
 
 ---
 
@@ -279,6 +281,21 @@ node dist/cli.js init
 node dist/cli.js init --preset strict --force
 ```
 
+### 17. Capture CycloneDX v1.5 SBOM Evidence
+```bash
+# Capture dependency inventory & CycloneDX v1.5 SBOM for workspace:
+node dist/cli.js sbom bundle_9a41f0bc --output ./artifacts/bom.cdx.json
+
+# Production dependencies only (exclude devDependencies):
+node dist/cli.js sbom bundle_9a41f0bc --no-dev
+```
+
+### 18. Remote Transparency Notary Attestation
+```bash
+# Anchor anonymized bundle SHA-256 digest to a remote transparency log:
+node dist/cli.js notarize bundle_9a41f0bc https://notary.example.com/v1/notarize --token $NOTARY_TOKEN
+```
+
 > **Interactive Tutorial:** See [examples/multi-agent-consensus/TUTORIAL.md](examples/multi-agent-consensus/TUTORIAL.md) and run `npx tsx examples/multi-agent-consensus/orchestrate.ts` for a complete end-to-end 3-agent orchestration simulation.
 
 ### CI/CD Pipeline Integration (GitHub Actions)
@@ -287,7 +304,7 @@ Evidence MCP provides an official composite action (`action.yml`) for seamless G
 
 ```yaml
 - name: Verify Agent Evidence, Quorum & Compliance Policy
-  uses: mokashreef/Evidence-MCP@v1.2.0
+  uses: mokashreef/Evidence-MCP@v1.3.0
   with:
     bundle-id: ${{ env.BUNDLE_ID }}
     require-quorum: 'true'
@@ -560,13 +577,15 @@ npm run build
 
 ---
 
-## Scope & Boundaries (v1.2.0)
+## Scope & Boundaries (v1.3.0)
 
-### Strictly In Scope for v1.2.0
+### Strictly In Scope for v1.3.0
 - Distributed Trusted Agent Key Registry (`register_trusted_agent` & `revoke_trusted_agent` tools, and `evidence-mcp registry` CLI) with active enforcement in verification, quorum, and policy checks (`requireTrustedRegistry`).
+- Remote transparency notary attestation (`notarize_evidence_bundle` tool, `evidence-mcp notarize` CLI, `verifyNotaryReceipt`, and policy `attestation.requireNotary` / `allowedNotaryFingerprints`) anchoring anonymized SHA-256 digests with zero source code leakage.
+- Signed CycloneDX v1.5 SBOM supply-chain evidence (`capture_sbom_evidence` tool, `evidence-mcp sbom` CLI, `sbom` policy compliance rules, manifest/lockfile freshness verification, and attestation digest binding).
 - Workspace-level cryptographic agent identity lifecycle management (`active`, `revoked`, `suspended`) with expiration and fingerprint binding verification.
 - Declarative Automated Evidence Policy Engine (`evaluate_evidence_policy` tool, `evidence-mcp policy`, and `evidence-mcp init` bootstrapping wizard with `recommended`/`strict`/`permissive` presets).
-- Multi-dimensional compliance rules evaluated against Git state, file patterns, server command execution, AST breaking change detection, assertion backing, signatures, consensus quorum, and package license declarations (`license`).
+- Multi-dimensional compliance rules evaluated against Git state, file patterns, server command execution, AST breaking change detection, assertion backing, signatures, notary receipts, consensus quorum, package licenses (`license`), and SBOM components (`sbom`).
 - Zero-external-dependency glob-like file pattern matcher supporting wildcards, extensions, and directory prefixes.
 - HMAC-SHA256 authenticated audit webhook dispatcher (`dispatch_webhook_audit` tool and `evidence-mcp webhook` CLI).
 - Safe network execution with timeouts via `AbortController` and signature generation (`X-Evidence-Signature`).
@@ -579,12 +598,12 @@ npm run build
 - Cryptographic verification proofs (`export_verification_proof` tool and `evidence-mcp proof create` CLI).
 - Proof verification and digest validation (`verify_replay_proof` tool and `evidence-mcp proof verify` CLI).
 - Sequential evidence replay and reproducibility auditing (`replayEvidenceBundle` and `evidence-mcp replay`).
-- AST structural symbol extraction and semantic diff computation (`capture_ast_evidence` tool and `evidence-mcp ast` CLI) for TypeScript, JavaScript, Python, Go, and Rust.
+- AST structural symbol extraction and semantic diff computation (`capture_ast_evidence` tool and `evidence-mcp ast` CLI) for TypeScript, JavaScript, Python, Go, Rust, Java, and C#.
 - Breaking change detection flagging removed exported symbols, visibility downgrades, and added required parameters.
 - Independent verification of AST code structures in `verify_evidence_bundle` against live on-disk symbols.
 - Multi-workspace and monorepo package support (`register_workspace` tool and `additionalWorkspaces`).
 - CLI workspace management (`evidence-mcp workspace add` and `evidence-mcp workspace list`).
-- Targeted multi-workspace evidence collection for file snapshots, Git inspection, command execution, and AST evidence.
+- Targeted multi-workspace evidence collection for file snapshots, Git inspection, command execution, AST, and SBOM evidence.
 - Strict per-workspace sandboxing and boundary validation preventing cross-package escapes.
 - Multi-repository and submodule Git state verification.
 - Sandboxed process execution runner (`execute_verified_command` and `evidence-mcp exec`) with active process concurrency semaphore guards.
@@ -597,14 +616,14 @@ npm run build
 - Deterministic canonical payload serialization (`getCanonicalPayload`) for tamper resistance.
 - Cryptographic signature re-verification in `verify_evidence_bundle` and CLI `verify`.
 - Local file persistence under `.evidence-mcp/bundles/`, `.evidence-mcp/proofs/`, `.evidence-mcp/registry/`, and key pairs under `.evidence-mcp/keys/`.
-- Standalone CLI interface (`verify`, `list`, `report`, `sign`, `exec`, `workspace`, `ast`, `proof`, `replay`, `endorse`, `quorum`, `summary`, `policy`, `webhook`, `registry`, `init`) with CI exit codes.
-- Interactive, responsive, offline-safe HTML report generation with multi-workspace tables, AST symbol catalogs, peer endorsements, and badges.
+- Standalone CLI interface (`verify`, `list`, `report`, `sign`, `exec`, `workspace`, `ast`, `proof`, `replay`, `endorse`, `quorum`, `summary`, `policy`, `webhook`, `registry`, `init`, `sbom`, `notarize`) with CI exit codes.
+- Interactive, responsive, offline-safe HTML report generation with multi-workspace tables, AST symbol catalogs, SBOM supply-chain summaries, peer endorsements, and badges.
 - Mandatory evidence-linked assertions.
-- Live verification of file hashes, Git status, AST symbols, and cryptographic signatures.
+- Live verification of file hashes, Git status, AST symbols, SBOM manifests, notary receipts, and cryptographic signatures.
 
-### Out of Scope for v1.2.0
+### Out of Scope for v1.3.0
 - **Direct Arbitrary Shell Command Execution:** Raw shell strings (e.g. `bash -c "..."`) without security boundaries are strictly rejected.
-- **Remote Publishing / Cloud Syncing:** Evidence bundles are local to the workspace. There is no auto-pushing to remote cloud APIs or external issue trackers.
+- **Remote Publishing / Cloud Source Uploads:** Evidence bundles stay local to the workspace. Remote notary endpoints receive only cryptographic bundle SHA-256 digests (`bundleDigest`) — never source code or file contents.
 
 ---
 
@@ -619,8 +638,9 @@ npm run build
 - **v0.9 (Completed):** Automated evidence policy engine & HMAC-signed audit webhooks.
 - **v1.0 (Completed):** Stable API freeze, distributed agent attestation registry, and multi-tenant bundle signing.
 - **v1.1 (Completed):** Python AST symbol parsing, runner concurrency semaphore, `evidence-mcp init` wizard, license compliance policy rules, multi-agent consensus tutorial, and enforced registry verification.
-- **v1.2 (Current Release):** Structural AST parsers & semantic diffing for Go & Rust, and SARIF v2.1.0 report export for GitHub Code Scanning.
-- **v1.3:** Remote notary attestations, Java/C# structural AST parsing, and signed SBOM bundle integration.
+- **v1.2 (Completed):** Structural AST parsers & semantic diffing for Go & Rust, and SARIF v2.1.0 report export for GitHub Code Scanning.
+- **v1.3 (Current Release):** Java & C# structural AST parsing, signed CycloneDX v1.5 SBOM integration, and remote transparency notary attestations.
+- **v1.4:** Multi-notary threshold policies, SLSA provenance attestation export, and tree-sitter / WASM AST plugin bridges.
 
 ---
 
