@@ -331,6 +331,167 @@ fn private_hash(input: &[u8]) -> u64 {
       expect(diff.isBreakingChange).toBe(true);
     });
 
+    it('extracts Java classes, interfaces, records, enums, constructors, generic params, and detects breaking diffs', () => {
+      expect(detectLanguage('TokenService.java')).toBe('java');
+
+      const javaSource = `
+package com.evidence.auth;
+
+import java.util.List;
+import java.util.Map;
+
+public interface TokenVerifier {
+    boolean verifyToken(String token);
+    private void auditInternal(String msg) {}
+}
+
+public enum AuthLevel {
+    STRICT,
+    PERMISSIVE
+}
+
+public record UserClaims(String userId, int ttlSeconds) {}
+
+public class TokenService implements TokenVerifier {
+    public TokenService(String secretKey) {
+    }
+
+    @Override
+    public Map<String, List<Integer>> inspectClaims(@NotNull String token, final Map<String, List<Integer>> claims) {
+        return claims;
+    }
+
+    private String hashRaw(String raw) {
+        return raw;
+    }
+}
+`;
+
+      const symbols = parseSourceSymbols(javaSource, 'TokenService.java');
+      const names = symbols.map((s) => s.name);
+
+      expect(names).toContain('TokenVerifier');
+      expect(names).toContain('TokenVerifier.verifyToken');
+      expect(names).toContain('TokenVerifier.auditInternal');
+      expect(names).toContain('AuthLevel');
+      expect(names).toContain('UserClaims');
+      expect(names).toContain('TokenService');
+      expect(names).toContain('TokenService.TokenService');
+      expect(names).toContain('TokenService.inspectClaims');
+      expect(names).toContain('TokenService.hashRaw');
+
+      const ifaceMethod = symbols.find((s) => s.name === 'TokenVerifier.verifyToken')!;
+      expect(ifaceMethod.kind).toBe('method');
+      expect(ifaceMethod.isExported).toBe(true);
+      expect(ifaceMethod.returnType).toBe('boolean');
+
+      const ifacePriv = symbols.find((s) => s.name === 'TokenVerifier.auditInternal')!;
+      expect(ifacePriv.isExported).toBe(false);
+
+      const claimsRecord = symbols.find((s) => s.name === 'UserClaims')!;
+      expect(claimsRecord.kind).toBe('class');
+      expect(claimsRecord.isExported).toBe(true);
+      expect(claimsRecord.parameters?.length).toBe(2);
+
+      const inspect = symbols.find((s) => s.name === 'TokenService.inspectClaims')!;
+      expect(inspect.isExported).toBe(true);
+      expect(inspect.returnType).toBe('Map<String, List<Integer>>');
+      expect(inspect.parameters).toEqual([
+        { name: 'token', type: 'String', optional: false, defaultValue: undefined },
+        { name: 'claims', type: 'Map<String, List<Integer>>', optional: false, defaultValue: undefined },
+      ]);
+
+      const privHelper = symbols.find((s) => s.name === 'TokenService.hashRaw')!;
+      expect(privHelper.isExported).toBe(false);
+
+      // Adding a required parameter to exported Java method triggers breaking change
+      const modifiedJava = javaSource.replace(
+        'public boolean verifyToken(String token);',
+        'boolean verifyToken(String token);'
+      );
+      const removedJava = javaSource.replace('    boolean verifyToken(String token);\n', '');
+      const diff = computeSemanticDiff(
+        symbols,
+        parseSourceSymbols(removedJava, 'TokenService.java'),
+        'TokenService.java'
+      );
+      expect(diff.hasChanges).toBe(true);
+      expect(diff.isBreakingChange).toBe(true);
+      expect(modifiedJava).toContain('TokenService');
+    });
+
+    it('extracts C# namespaces, structs, classes, async methods, optional params, and detects breaking diffs', () => {
+      expect(detectLanguage('Verifier.cs')).toBe('csharp');
+
+      const csSource = `
+using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
+
+namespace Evidence.Verification {
+    public struct Point2D {
+        public double DistanceTo(Point2D other) => 0;
+    }
+
+    public class BundleValidator {
+        public BundleValidator(string workspacePath) {
+        }
+
+        [HttpPost("verify")]
+        public async Task<bool> ValidateAsync([FromBody] Dictionary<string, List<int>> payload, bool strict = true) {
+            return await Task.FromResult(strict);
+        }
+
+        internal void ResetCache() {
+        }
+    }
+}
+`;
+
+      const symbols = parseSourceSymbols(csSource, 'Verifier.cs');
+      const names = symbols.map((s) => s.name);
+
+      expect(names).toContain('Point2D');
+      expect(names).toContain('Point2D.DistanceTo');
+      expect(names).toContain('BundleValidator');
+      expect(names).toContain('BundleValidator.BundleValidator');
+      expect(names).toContain('BundleValidator.ValidateAsync');
+      expect(names).toContain('BundleValidator.ResetCache');
+
+      const validate = symbols.find((s) => s.name === 'BundleValidator.ValidateAsync')!;
+      expect(validate.kind).toBe('method');
+      expect(validate.isExported).toBe(true);
+      expect(validate.isAsync).toBe(true);
+      expect(validate.returnType).toBe('Task<bool>');
+      expect(validate.parameters).toEqual([
+        {
+          name: 'payload',
+          type: 'Dictionary<string, List<int>>',
+          optional: false,
+          defaultValue: undefined,
+        },
+        {
+          name: 'strict',
+          type: 'bool',
+          optional: true,
+          defaultValue: 'true',
+        },
+      ]);
+
+      const reset = symbols.find((s) => s.name === 'BundleValidator.ResetCache')!;
+      expect(reset.isExported).toBe(false);
+
+      // Adding a required parameter to public async method triggers breaking change
+      const modifiedCs = csSource.replace(
+        'public async Task<bool> ValidateAsync([FromBody] Dictionary<string, List<int>> payload, bool strict = true)',
+        'public async Task<bool> ValidateAsync([FromBody] Dictionary<string, List<int>> payload, bool strict = true, string tenantId)'
+      );
+      const nextSymbols = parseSourceSymbols(modifiedCs, 'Verifier.cs');
+      const diff = computeSemanticDiff(symbols, nextSymbols, 'Verifier.cs');
+      expect(diff.hasChanges).toBe(true);
+      expect(diff.isBreakingChange).toBe(true);
+    });
+
     it('extracts top-level keys from JSON files', () => {
       const jsonSource = JSON.stringify({
         name: 'evidence-mcp',
