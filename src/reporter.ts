@@ -1064,7 +1064,7 @@ export function formatSarifReport(
         tool: {
           driver: {
             name: 'Evidence MCP',
-            version: '1.3.0',
+            version: '1.4.0',
             informationUri: 'https://github.com/mokashreef/Evidence-MCP',
             rules: Array.from(rulesMap.values()),
           },
