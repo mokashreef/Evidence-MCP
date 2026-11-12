@@ -303,4 +303,113 @@ describe('Remote Transparency Notary Attestation', () => {
     expect(updated.notaryReceipts?.length).toBe(2);
     expect(updated.notaryReceipts?.[1].logIndex).toBe(2);
   });
+
+  it('enforces multi-notary minNotaryCount quorum across distinct notary keys', async () => {
+    const bundle = await createVerifiedBundle();
+    const notaryUrl = `http://127.0.0.1:${serverPort}/notarize`;
+    const notary2Keys = generateAgentKeyPair();
+    const notary3Keys = generateAgentKeyPair();
+
+    // Two receipts from the SAME notary key must only count as 1 distinct notary
+    await notarizeEvidenceBundle({
+      bundleId: bundle.id,
+      notaryUrl,
+      workspacePath: tempWorkspace,
+    });
+    await notarizeEvidenceBundle({
+      bundleId: bundle.id,
+      notaryUrl,
+      workspacePath: tempWorkspace,
+    });
+
+    const duplicateKeyBundle = await loadBundle(bundle.id, tempWorkspace);
+    expect(duplicateKeyBundle.notaryReceipts?.length).toBe(2);
+
+    const sameKeyEval = evaluateEvidencePolicy({
+      bundle: duplicateKeyBundle,
+      policy: {
+        attestation: {
+          minNotaryCount: 2,
+        },
+      },
+    });
+    expect(sameKeyEval.passed).toBe(false);
+    const sameKeyRule = sameKeyEval.evaluations.find((e) => e.rule === 'attestation.minNotaryCount');
+    expect(sameKeyRule?.passed).toBe(false);
+    expect(sameKeyRule?.details?.distinctNotaryCount).toBe(1);
+
+    // Add a valid receipt signed by an unauthorized third notary key
+    const unapprovedReceipt = signNotaryAttestationPayload({
+      bundleId: duplicateKeyBundle.id,
+      bundleDigest: duplicateKeyBundle.notaryReceipts![0].bundleDigest,
+      notaryUrl: 'https://rogue-notary.example.com/notarize',
+      logIndex: 1,
+      privateKeyPem: notary3Keys.privateKeyPem,
+    });
+    duplicateKeyBundle.notaryReceipts!.push(unapprovedReceipt);
+
+    // Without allowlist, 2 distinct keys satisfy minNotaryCount: 2
+    const unguardedEval = evaluateEvidencePolicy({
+      bundle: duplicateKeyBundle,
+      policy: {
+        attestation: {
+          minNotaryCount: 2,
+        },
+      },
+    });
+    expect(unguardedEval.passed).toBe(true);
+
+    // With allowedNotaryFingerprints [notaryKeys, notary2Keys], unapproved key is excluded from quorum!
+    const filteredQuorumFail = evaluateEvidencePolicy({
+      bundle: duplicateKeyBundle,
+      policy: {
+        attestation: {
+          minNotaryCount: 2,
+          allowedNotaryFingerprints: [notaryKeys.fingerprint, notary2Keys.fingerprint],
+        },
+      },
+    });
+    expect(filteredQuorumFail.passed).toBe(false);
+    expect(
+      filteredQuorumFail.evaluations.find((e) => e.rule === 'attestation.minNotaryCount')?.details
+        ?.distinctNotaryCount
+    ).toBe(1);
+
+    // Add valid receipt from second authorized notary key -> satisfies quorum
+    const approvedSecondReceipt = signNotaryAttestationPayload({
+      bundleId: duplicateKeyBundle.id,
+      bundleDigest: duplicateKeyBundle.notaryReceipts![0].bundleDigest,
+      notaryUrl: 'https://notary2.example.com/notarize',
+      logIndex: 7,
+      privateKeyPem: notary2Keys.privateKeyPem,
+    });
+    duplicateKeyBundle.notaryReceipts!.push(approvedSecondReceipt);
+
+    const quorumPass = evaluateEvidencePolicy({
+      bundle: duplicateKeyBundle,
+      policy: {
+        attestation: {
+          requireNotary: true,
+          minNotaryCount: 2,
+          allowedNotaryFingerprints: [notaryKeys.fingerprint, notary2Keys.fingerprint],
+        },
+      },
+    });
+    expect(quorumPass.passed).toBe(true);
+    expect(
+      quorumPass.evaluations.find((e) => e.rule === 'attestation.minNotaryCount')?.details
+        ?.distinctNotaryCount
+    ).toBe(2);
+
+    // Invalid threshold (<= 0 or non-integer) fails safely
+    const invalidThresholdEval = evaluateEvidencePolicy({
+      bundle: duplicateKeyBundle,
+      policy: {
+        attestation: {
+          minNotaryCount: 0,
+        },
+      },
+    });
+    expect(invalidThresholdEval.passed).toBe(false);
+  });
 });

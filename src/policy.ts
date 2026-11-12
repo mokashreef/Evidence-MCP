@@ -684,9 +684,22 @@ export function evaluateEvidencePolicy(options: {
       });
     }
 
-    if (policy.attestation.requireNotary || (policy.attestation.allowedNotaryFingerprints && policy.attestation.allowedNotaryFingerprints.length > 0)) {
+    if (
+      policy.attestation.requireNotary ||
+      (policy.attestation.allowedNotaryFingerprints &&
+        policy.attestation.allowedNotaryFingerprints.length > 0) ||
+      typeof policy.attestation.minNotaryCount === 'number'
+    ) {
       const receipts = bundle.notaryReceipts || [];
       const validReceipts = receipts.filter((r) => verifyNotaryReceipt(r, bundle).valid);
+      const allowed = policy.attestation.allowedNotaryFingerprints;
+      const hasAllowlist = Array.isArray(allowed) && allowed.length > 0;
+      const eligibleReceipts = hasAllowlist
+        ? validReceipts.filter((r) => allowed.includes(r.notaryKeyFingerprint))
+        : validReceipts;
+      const distinctNotaryKeys = Array.from(
+        new Set(eligibleReceipts.map((r) => r.notaryKeyFingerprint))
+      );
 
       if (policy.attestation.requireNotary) {
         if (validReceipts.length === 0) {
@@ -711,10 +724,8 @@ export function evaluateEvidencePolicy(options: {
         }
       }
 
-      if (policy.attestation.allowedNotaryFingerprints && policy.attestation.allowedNotaryFingerprints.length > 0) {
-        const allowed = policy.attestation.allowedNotaryFingerprints;
-        const authorized = validReceipts.filter((r) => allowed.includes(r.notaryKeyFingerprint));
-        if (authorized.length === 0) {
+      if (hasAllowlist) {
+        if (eligibleReceipts.length === 0) {
           evaluations.push({
             rule: 'attestation.allowedNotaryFingerprints',
             category: 'attestation',
@@ -728,7 +739,51 @@ export function evaluateEvidencePolicy(options: {
             category: 'attestation',
             passed: true,
             severity: 'error',
-            message: `Remote notary receipt authorized by trusted notary key (${authorized[0].notaryKeyFingerprint}).`,
+            message: `Remote notary receipt authorized by trusted notary key (${eligibleReceipts[0].notaryKeyFingerprint}).`,
+          });
+        }
+      }
+
+      if (typeof policy.attestation.minNotaryCount === 'number') {
+        const requiredCount = policy.attestation.minNotaryCount;
+        if (!Number.isInteger(requiredCount) || requiredCount < 1) {
+          evaluations.push({
+            rule: 'attestation.minNotaryCount',
+            category: 'attestation',
+            passed: false,
+            severity: 'error',
+            message: `Invalid minNotaryCount policy threshold (${requiredCount}); must be a positive integer >= 1.`,
+            details: { requiredMinNotaryCount: requiredCount },
+          });
+        } else if (distinctNotaryKeys.length < requiredCount) {
+          evaluations.push({
+            rule: 'attestation.minNotaryCount',
+            category: 'attestation',
+            passed: false,
+            severity: 'error',
+            message: hasAllowlist
+              ? `Multi-notary quorum not met: found ${distinctNotaryKeys.length} distinct allowed notary key(s) (${validReceipts.length} total valid receipt(s)), require at least ${requiredCount}.`
+              : `Multi-notary quorum not met: found ${distinctNotaryKeys.length} distinct valid notary key(s) (${validReceipts.length} total valid receipt(s)), require at least ${requiredCount}.`,
+            details: {
+              distinctNotaryCount: distinctNotaryKeys.length,
+              validReceiptCount: validReceipts.length,
+              requiredMinNotaryCount: requiredCount,
+              fingerprints: distinctNotaryKeys,
+            },
+          });
+        } else {
+          evaluations.push({
+            rule: 'attestation.minNotaryCount',
+            category: 'attestation',
+            passed: true,
+            severity: 'error',
+            message: `Multi-notary quorum satisfied: ${distinctNotaryKeys.length} distinct valid notary key(s) attested the bundle (required >= ${requiredCount}).`,
+            details: {
+              distinctNotaryCount: distinctNotaryKeys.length,
+              validReceiptCount: validReceipts.length,
+              requiredMinNotaryCount: requiredCount,
+              fingerprints: distinctNotaryKeys,
+            },
           });
         }
       }
