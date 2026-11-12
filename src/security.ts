@@ -166,3 +166,52 @@ export function assertSafeFilePath(workspacePath: string, inputPath: string): Sa
     relativePath: normalizedReal,
   };
 }
+
+/**
+ * Safely writes generated artifact content inside a workspace boundary, rejecting
+ * path traversal, symlink escapes, and sensitive file overwrites.
+ */
+export async function writeWorkspaceOutputFile(
+  workspacePath: string,
+  outputPath: string,
+  content: string
+): Promise<string> {
+  const absWorkspace = path.resolve(workspacePath);
+  const resolvedOut = path.resolve(absWorkspace, outputPath);
+  const relOut = path.relative(absWorkspace, resolvedOut);
+
+  if (relOut.startsWith('..') || path.isAbsolute(relOut)) {
+    throw new Error(`Path traversal rejected: outputPath "${outputPath}" escapes workspace.`);
+  }
+
+  const normalizedRel = relOut.replace(/\\/g, '/');
+  if (isSensitivePath(normalizedRel) || isSensitivePath(resolvedOut)) {
+    throw new Error(
+      `Writing to sensitive path blocked: "${outputPath}" matches restricted file patterns.`
+    );
+  }
+
+  await fs.promises.mkdir(path.dirname(resolvedOut), { recursive: true });
+  const realParent = await fs.promises.realpath(path.dirname(resolvedOut));
+  const realWs = await fs.promises.realpath(absWorkspace);
+  const relRealParent = path.relative(realWs, realParent);
+
+  if (relRealParent.startsWith('..') || path.isAbsolute(relRealParent)) {
+    throw new Error(`Symlink escape rejected on outputPath "${outputPath}".`);
+  }
+
+  // If destination already exists as a symlink, ensure it resolves inside workspace
+  if (fs.existsSync(resolvedOut)) {
+    const stat = await fs.promises.lstat(resolvedOut);
+    if (stat.isSymbolicLink()) {
+      const realDest = await fs.promises.realpath(resolvedOut);
+      const relDest = path.relative(realWs, realDest);
+      if (relDest.startsWith('..') || path.isAbsolute(relDest)) {
+        throw new Error(`Symlink escape rejected on outputPath "${outputPath}".`);
+      }
+    }
+  }
+
+  await fs.promises.writeFile(resolvedOut, content, 'utf8');
+  return resolvedOut;
+}

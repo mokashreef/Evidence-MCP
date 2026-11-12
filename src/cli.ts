@@ -15,6 +15,7 @@ import { dispatchAuditWebhook } from './webhook.js';
 import { registerTrustedAgent, revokeTrustedAgent, listTrustedAgents } from './registry.js';
 import { captureWorkspaceSbom } from './sbom.js';
 import { notarizeEvidenceBundle } from './notary.js';
+import { generateSlsaProvenance } from './slsa.js';
 import {
   CommandEvidence,
   VerificationProof,
@@ -56,6 +57,7 @@ Usage:
   evidence-mcp registry revoke <agentId> <reason>   Revoke a trusted agent key in registry
   evidence-mcp sbom <bundleId> [options]            Capture CycloneDX SBOM evidence for workspace
   evidence-mcp notarize <bundleId> <notaryUrl>      Anchor bundle digest to a remote transparency notary
+  evidence-mcp slsa <bundleId> [options]            Export SLSA v1.0 provenance attestation envelope
   evidence-mcp init [options]                       Bootstrap evidence.policy.json configuration
   evidence-mcp --help, -h                           Show this help message
   evidence-mcp --version, -v                        Show version number
@@ -1360,6 +1362,68 @@ export async function runCli(args: string[]): Promise<number> {
       return 0;
     } catch (err: unknown) {
       console.error(`Notarization error: ${(err as Error).message}`);
+      return 1;
+    }
+  }
+
+  // 18. Command: slsa <bundleId> [options]
+  if (firstArg === 'slsa') {
+    const bundleId = args[1];
+    if (!bundleId || bundleId.startsWith('-')) {
+      console.error('Error: bundleId is required for "slsa" command.');
+      console.error(
+        'Usage: evidence-mcp slsa <bundleId> [--output slsa.intoto.json] [--builder-id <uri>] [--unsigned]'
+      );
+      return 1;
+    }
+
+    let outputFile: string | undefined;
+    let builderId: string | undefined;
+    let sign = true;
+    let workspace: string | undefined;
+
+    for (let i = 2; i < args.length; i++) {
+      if ((args[i] === '--output' || args[i] === '-o') && args[i + 1]) {
+        outputFile = args[++i];
+      } else if (args[i] === '--builder-id' && args[i + 1]) {
+        builderId = args[++i];
+      } else if (args[i] === '--unsigned') {
+        sign = false;
+      } else if ((args[i] === '--workspace' || args[i] === '-w') && args[i + 1]) {
+        workspace = args[++i];
+      }
+    }
+
+    try {
+      const bundle = await loadBundle(bundleId, workspace);
+      const envelope = await generateSlsaProvenance({
+        bundle,
+        builderId,
+        includeSignature: sign,
+      });
+
+      const jsonText = JSON.stringify(envelope, null, 2);
+      if (outputFile) {
+        const resolvedOut = path.resolve(outputFile);
+        await fs.promises.mkdir(path.dirname(resolvedOut), { recursive: true });
+        await fs.promises.writeFile(resolvedOut, jsonText, 'utf8');
+        console.log(`SLSA v1.0 Provenance written to: ${resolvedOut}`);
+      } else {
+        console.log(`\nSLSA v1.0 Provenance: ${bundleId}`);
+        console.log('='.repeat(80));
+        console.log(`Statement Digest: ${envelope.statementDigest}`);
+        console.log(`Subjects:         ${envelope.statement.subject.length}`);
+        console.log(
+          `Dependencies:     ${envelope.statement.predicate.buildDefinition.resolvedDependencies.length}`
+        );
+        console.log(
+          `Signed:           ${envelope.signature ? `YES (${envelope.signature.keyFingerprint})` : 'NO'}`
+        );
+        console.log('='.repeat(80) + '\n');
+      }
+      return 0;
+    } catch (err: unknown) {
+      console.error(`SLSA export error: ${(err as Error).message}`);
       return 1;
     }
   }
