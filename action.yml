@@ -42,6 +42,22 @@ inputs:
     description: 'Optional output path for SARIF v2.1.0 report (e.g. evidence-results.sarif) for GitHub Code Scanning.'
     required: false
     default: ''
+  capture-sbom:
+    description: 'Whether to capture multi-ecosystem CycloneDX v1.5 SBOM evidence before policy evaluation.'
+    required: false
+    default: 'false'
+  sbom-output:
+    description: 'Optional output path for generated CycloneDX v1.5 BOM JSON (when capture-sbom is true).'
+    required: false
+    default: ''
+  slsa-output:
+    description: 'Optional output path for signed SLSA v1.0 Provenance attestation JSON.'
+    required: false
+    default: ''
+  slsa-builder-id:
+    description: 'Optional SLSA builder ID URI override when slsa-output is configured.'
+    required: false
+    default: ''
 
 runs:
   using: 'composite'
@@ -63,6 +79,16 @@ runs:
       shell: bash
       run: |
         node dist/cli.js verify "${{ inputs.bundle-id }}" --workspace "${{ inputs.workspace-path }}"
+
+    - name: Capture CycloneDX SBOM (if enabled)
+      if: ${{ inputs.capture-sbom == 'true' }}
+      shell: bash
+      run: |
+        SBOM_OUT_ARG=""
+        if [ -n "${{ inputs.sbom-output }}" ]; then
+          SBOM_OUT_ARG="--output ${{ inputs.sbom-output }}"
+        fi
+        node dist/cli.js sbom "${{ inputs.bundle-id }}" $SBOM_OUT_ARG --workspace "${{ inputs.workspace-path }}"
 
     - name: Check Quorum (if enabled)
       if: ${{ inputs.require-quorum == 'true' }}
@@ -103,6 +129,16 @@ runs:
           POLICY_ARG="--policy ${{ inputs.policy-file }}"
         fi
         node dist/cli.js report "${{ inputs.bundle-id }}" --format sarif $POLICY_ARG --output "${{ inputs.sarif-output }}" --workspace "${{ inputs.workspace-path }}"
+
+    - name: Export SLSA v1.0 Provenance (if configured)
+      if: ${{ inputs.slsa-output != '' }}
+      shell: bash
+      run: |
+        BUILDER_ARG=""
+        if [ -n "${{ inputs.slsa-builder-id }}" ]; then
+          BUILDER_ARG="--builder-id ${{ inputs.slsa-builder-id }}"
+        fi
+        node dist/cli.js slsa "${{ inputs.bundle-id }}" $BUILDER_ARG --output "${{ inputs.slsa-output }}" --workspace "${{ inputs.workspace-path }}"
 
     - name: Generate GitHub Step Summary
       shell: bash
