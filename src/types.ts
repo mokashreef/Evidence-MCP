@@ -475,6 +475,8 @@ export const NotarizeEvidenceBundleSchema = z.object({
   notaryUrl: z.string().url('notaryUrl must be a valid URL.'),
   authToken: z.string().optional(),
   timeoutMs: z.number().int().min(500).max(60000).optional(),
+  allowPrivateNetwork: z.boolean().optional(),
+  maxRetries: z.number().int().min(0).max(5).optional(),
   workspacePath: z.string().optional(),
 });
 export type NotarizeEvidenceBundleInput = z.infer<typeof NotarizeEvidenceBundleSchema>;
@@ -566,6 +568,8 @@ export interface WebhookDispatchOptions {
   includeReport?: boolean;
   headers?: Record<string, string>;
   timeoutMs?: number;
+  allowPrivateNetwork?: boolean;
+  maxRetries?: number;
   workspacePath?: string;
 }
 

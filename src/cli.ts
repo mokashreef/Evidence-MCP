@@ -989,6 +989,7 @@ export async function runCli(args: string[]): Promise<number> {
     let secretToken: string | undefined;
     let includeProof = false;
     let timeoutMs = 10000;
+    let allowPrivateNetwork = false;
     let workspace: string | undefined;
 
     for (let i = 3; i < args.length; i++) {
@@ -996,6 +997,8 @@ export async function runCli(args: string[]): Promise<number> {
         secretToken = args[++i];
       } else if (args[i] === '--proof') {
         includeProof = true;
+      } else if (args[i] === '--allow-private-network') {
+        allowPrivateNetwork = true;
       } else if (args[i] === '--timeout' && args[i + 1]) {
         timeoutMs = parseInt(args[++i], 10) || 10000;
       } else if ((args[i] === '--workspace' || args[i] === '-w') && args[i + 1]) {
@@ -1010,6 +1013,7 @@ export async function runCli(args: string[]): Promise<number> {
         secretToken,
         includeProof,
         timeoutMs,
+        allowPrivateNetwork,
         workspacePath: workspace,
       });
 
@@ -1317,11 +1321,14 @@ export async function runCli(args: string[]): Promise<number> {
 
     let authToken: string | undefined;
     let timeoutMs = 10000;
+    let allowPrivateNetwork = false;
     let workspace: string | undefined;
 
     for (let i = 3; i < args.length; i++) {
       if ((args[i] === '--token' || args[i] === '-t') && args[i + 1]) {
         authToken = args[++i];
+      } else if (args[i] === '--allow-private-network') {
+        allowPrivateNetwork = true;
       } else if (args[i] === '--timeout' && args[i + 1]) {
         timeoutMs = parseInt(args[++i], 10);
       } else if ((args[i] === '--workspace' || args[i] === '-w') && args[i + 1]) {
@@ -1335,6 +1342,7 @@ export async function runCli(args: string[]): Promise<number> {
         notaryUrl,
         authToken,
         timeoutMs,
+        allowPrivateNetwork,
         workspacePath: workspace,
       });
 

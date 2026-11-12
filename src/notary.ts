@@ -177,15 +177,25 @@ export async function notarizeEvidenceBundle(options: {
   notaryUrl: string;
   authToken?: string;
   timeoutMs?: number;
+  allowPrivateNetwork?: boolean;
+  maxRetries?: number;
   workspacePath?: string;
 }): Promise<{
   receipt: NotaryReceipt;
   bundleDigest: string;
   durationMs: number;
 }> {
-  const { bundleId, notaryUrl, authToken, timeoutMs = 10000, workspacePath } = options;
+  const {
+    bundleId,
+    notaryUrl,
+    authToken,
+    timeoutMs = 10000,
+    allowPrivateNetwork = false,
+    maxRetries,
+    workspacePath,
+  } = options;
 
-  validateHttpUrl(notaryUrl);
+  validateHttpUrl(notaryUrl, { allowPrivateNetwork });
   const bundle = await loadBundle(bundleId, workspacePath);
   const bundleDigest = computeBundleDigest(bundle);
 
@@ -209,6 +219,8 @@ export async function notarizeEvidenceBundle(options: {
     body: JSON.stringify(submissionPayload),
     headers,
     timeoutMs,
+    allowPrivateNetwork,
+    maxRetries,
   });
 
   if (!res.ok) {

@@ -54,15 +54,17 @@ export async function dispatchAuditWebhook(
     includeProof = false,
     headers = {},
     timeoutMs = 10000,
+    allowPrivateNetwork = false,
+    maxRetries,
     workspacePath,
   } = options;
 
   const startTime = Date.now();
   const timestamp = new Date().toISOString();
 
-  // Validate URL protocol
+  // Validate URL protocol and SSRF host rules
   try {
-    validateHttpUrl(webhookUrl);
+    validateHttpUrl(webhookUrl, { allowPrivateNetwork });
   } catch (err: unknown) {
     return {
       bundleId,
@@ -141,6 +143,8 @@ export async function dispatchAuditWebhook(
     body: payloadString,
     headers: requestHeaders,
     timeoutMs,
+    allowPrivateNetwork,
+    maxRetries,
   });
 
   return {
