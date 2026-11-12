@@ -102,7 +102,7 @@ All data is stored locally in human-readable JSON files inside the workspace roo
 
 ## Tools Catalog (v1.3.0)
 
-Evidence MCP provides twenty-one focused tools through the Model Context Protocol:
+Evidence MCP provides twenty-two focused tools through the Model Context Protocol:
 
 | Tool | Purpose | Key Inputs | Output |
 |---|---|---|---|
@@ -126,7 +126,8 @@ Evidence MCP provides twenty-one focused tools through the Model Context Protoco
 | `register_trusted_agent` | Registers an authorized agent public key and role in the workspace registry | `agentId`, `name`, `role`, `publicKeyPem`, `expiresAt?`, `metadata?` | `agentId`, `name`, `role`, `keyFingerprint`, `status`, `registeredAt` |
 | `revoke_trusted_agent` | Revokes a trusted agent key in the registry with an audit reason | `agentId`, `reason`, `workspacePath?` | `agentId`, `status: 'revoked'`, `revokedAt`, `revocationReason` |
 | `capture_sbom_evidence` | Generates a verifiable CycloneDX v1.5 SBOM from manifests/lockfiles | `bundleId`, `workspaceName?`, `includeDevDependencies?`, `outputPath?` | `evidenceId`, `componentCount`, `bomDigest`, `licenseSummary` |
-| `notarize_evidence_bundle` | Anchors anonymized bundle SHA-256 digest to a remote transparency notary | `bundleId`, `notaryUrl`, `authToken?`, `timeoutMs?` | `receiptId`, `logIndex`, `merkleLeafHash`, `notaryKeyFingerprint` |
+| `notarize_evidence_bundle` | Anchors anonymized bundle SHA-256 digest to a remote transparency notary | `bundleId`, `notaryUrl`, `authToken?`, `timeoutMs?`, `allowPrivateNetwork?` | `receiptId`, `logIndex`, `merkleLeafHash`, `notaryKeyFingerprint` |
+| `export_slsa_provenance` | Generates and Ed25519-signs an in-toto v1 / SLSA v1.0 provenance envelope | `bundleId`, `builderId?`, `sign?`, `outputPath?` | `statementDigest`, `subjectCount`, `dependencyCount`, `provenance` |
 
 ---
 
@@ -296,6 +297,12 @@ node dist/cli.js sbom bundle_9a41f0bc --no-dev
 node dist/cli.js notarize bundle_9a41f0bc https://notary.example.com/v1/notarize --token $NOTARY_TOKEN
 ```
 
+### 19. SLSA v1.0 Provenance Attestation Export
+```bash
+# Generate and Ed25519-sign an in-toto v1 / SLSA Provenance v1.0 attestation:
+node dist/cli.js slsa bundle_9a41f0bc --output ./artifacts/release.slsa.json
+```
+
 > **Interactive Tutorial:** See [examples/multi-agent-consensus/TUTORIAL.md](examples/multi-agent-consensus/TUTORIAL.md) and run `npx tsx examples/multi-agent-consensus/orchestrate.ts` for a complete end-to-end 3-agent orchestration simulation.
 
 ### CI/CD Pipeline Integration (GitHub Actions)
@@ -304,15 +311,17 @@ Evidence MCP provides an official composite action (`action.yml`) for seamless G
 
 ```yaml
 - name: Verify Agent Evidence, Quorum & Compliance Policy
-  uses: mokashreef/Evidence-MCP@v1.3.0
+  uses: mokashreef/Evidence-MCP@v1.4.0
   with:
     bundle-id: ${{ env.BUNDLE_ID }}
+    capture-sbom: 'true'
     require-quorum: 'true'
     min-endorsements: '2'
     required-roles: 'tester,security_auditor'
     require-policy: 'true'
     policy-file: 'evidence.policy.json'
     sarif-output: 'evidence-results.sarif'
+    slsa-output: 'release.slsa.json'
     webhook-url: ${{ secrets.AUDIT_WEBHOOK_URL }}
     webhook-secret: ${{ secrets.AUDIT_WEBHOOK_SECRET }}
 ```
@@ -577,12 +586,14 @@ npm run build
 
 ---
 
-## Scope & Boundaries (v1.3.0)
+## Scope & Boundaries (v1.4.0)
 
-### Strictly In Scope for v1.3.0
+### Strictly In Scope for v1.4.0
 - Distributed Trusted Agent Key Registry (`register_trusted_agent` & `revoke_trusted_agent` tools, and `evidence-mcp registry` CLI) with active enforcement in verification, quorum, and policy checks (`requireTrustedRegistry`).
-- Remote transparency notary attestation (`notarize_evidence_bundle` tool, `evidence-mcp notarize` CLI, `verifyNotaryReceipt`, and policy `attestation.requireNotary` / `allowedNotaryFingerprints`) anchoring anonymized SHA-256 digests with zero source code leakage.
-- Signed CycloneDX v1.5 SBOM supply-chain evidence (`capture_sbom_evidence` tool, `evidence-mcp sbom` CLI, `sbom` policy compliance rules, manifest/lockfile freshness verification, and attestation digest binding).
+- Remote transparency notary attestation (`notarize_evidence_bundle` tool, `evidence-mcp notarize` CLI, `verifyNotaryReceipt`, and policy `attestation.requireNotary` / `allowedNotaryFingerprints` / `minNotaryCount` multi-notary quorum) anchoring anonymized SHA-256 digests with zero source code leakage.
+- Signed CycloneDX v1.5 SBOM supply-chain evidence (`capture_sbom_evidence` tool, `evidence-mcp sbom` CLI) across **npm, Go, Rust, and Python** ecosystems with polyglot secondary manifest verification (`additionalManifests`), `sbom` policy compliance rules, and attestation digest binding.
+- SLSA v1.0 Provenance attestation export (`export_slsa_provenance` tool, `evidence-mcp slsa` CLI, `generateSlsaProvenance`, `verifySlsaProvenanceSignature`) producing signed in-toto v1 envelopes linking artifacts, Git commits, SBOM dependencies, commands, and notary receipts.
+- SSRF-hardened outbound HTTP networking (`src/network.ts`) blocking private/loopback/metadata IP ranges and DNS rebinds by default (`allowPrivateNetwork` opt-in) alongside bounded exponential backoff retries.
 - Workspace-level cryptographic agent identity lifecycle management (`active`, `revoked`, `suspended`) with expiration and fingerprint binding verification.
 - Declarative Automated Evidence Policy Engine (`evaluate_evidence_policy` tool, `evidence-mcp policy`, and `evidence-mcp init` bootstrapping wizard with `recommended`/`strict`/`permissive` presets).
 - Multi-dimensional compliance rules evaluated against Git state, file patterns, server command execution, AST breaking change detection, assertion backing, signatures, notary receipts, consensus quorum, package licenses (`license`), and SBOM components (`sbom`).
@@ -616,12 +627,12 @@ npm run build
 - Deterministic canonical payload serialization (`getCanonicalPayload`) for tamper resistance.
 - Cryptographic signature re-verification in `verify_evidence_bundle` and CLI `verify`.
 - Local file persistence under `.evidence-mcp/bundles/`, `.evidence-mcp/proofs/`, `.evidence-mcp/registry/`, and key pairs under `.evidence-mcp/keys/`.
-- Standalone CLI interface (`verify`, `list`, `report`, `sign`, `exec`, `workspace`, `ast`, `proof`, `replay`, `endorse`, `quorum`, `summary`, `policy`, `webhook`, `registry`, `init`, `sbom`, `notarize`) with CI exit codes.
+- Standalone CLI interface (`verify`, `list`, `report`, `sign`, `exec`, `workspace`, `ast`, `proof`, `replay`, `endorse`, `quorum`, `summary`, `policy`, `webhook`, `registry`, `init`, `sbom`, `notarize`, `slsa`) with CI exit codes.
 - Interactive, responsive, offline-safe HTML report generation with multi-workspace tables, AST symbol catalogs, SBOM supply-chain summaries, peer endorsements, and badges.
 - Mandatory evidence-linked assertions.
 - Live verification of file hashes, Git status, AST symbols, SBOM manifests, notary receipts, and cryptographic signatures.
 
-### Out of Scope for v1.3.0
+### Out of Scope for v1.4.0
 - **Direct Arbitrary Shell Command Execution:** Raw shell strings (e.g. `bash -c "..."`) without security boundaries are strictly rejected.
 - **Remote Publishing / Cloud Source Uploads:** Evidence bundles stay local to the workspace. Remote notary endpoints receive only cryptographic bundle SHA-256 digests (`bundleDigest`) — never source code or file contents.
 
@@ -639,8 +650,9 @@ npm run build
 - **v1.0 (Completed):** Stable API freeze, distributed agent attestation registry, and multi-tenant bundle signing.
 - **v1.1 (Completed):** Python AST symbol parsing, runner concurrency semaphore, `evidence-mcp init` wizard, license compliance policy rules, multi-agent consensus tutorial, and enforced registry verification.
 - **v1.2 (Completed):** Structural AST parsers & semantic diffing for Go & Rust, and SARIF v2.1.0 report export for GitHub Code Scanning.
-- **v1.3 (Current Release):** Java & C# structural AST parsing, signed CycloneDX v1.5 SBOM integration, and remote transparency notary attestations.
-- **v1.4:** Multi-notary threshold policies, SLSA provenance attestation export, and tree-sitter / WASM AST plugin bridges.
+- **v1.3 (Completed):** Java & C# structural AST parsing, signed CycloneDX v1.5 SBOM integration, and remote transparency notary attestations.
+- **v1.4 (Current Release):** Multi-notary threshold quorum policies (`minNotaryCount`), SSRF-hardened networking with exponential backoff, multi-ecosystem SBOM scanning (npm, Go, Rust, Python), SLSA v1.0 provenance attestation export, and automated release/npm publishing workflow.
+- **v1.5:** Tree-sitter / WASM AST plugin bridges, native Sigstore/Rekor transparency log adapter, and real-time MCP client integration templates.
 
 ---
 

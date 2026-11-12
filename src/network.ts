@@ -275,7 +275,7 @@ export async function postJsonWithTimeout(options: HttpPostOptions): Promise<Htt
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'User-Agent': 'Evidence-MCP/1.3.0',
+          'User-Agent': 'Evidence-MCP/1.4.0',
           ...headers,
         },
         body,

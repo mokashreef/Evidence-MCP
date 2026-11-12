@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-11-12
+
+### Added
+- **Multi-Notary Threshold Quorum Policies (`src/policy.ts`, `src/types.ts`, PR #30):**
+  - Added `minNotaryCount` to `EvidencePolicyAttestationRules` enforcing a configurable minimum count of distinct valid `notaryKeyFingerprint` receipts (automatically scoped to `allowedNotaryFingerprints` when specified).
+- **Multi-Ecosystem SBOM Scanning (`src/sbom.ts`, `src/verifier.ts`, PR #32):**
+  - Expanded CycloneDX v1.5 SBOM scanning beyond npm (`package.json` / `package-lock.json`) to Go (`go.mod` / `go.sum`), Rust (`Cargo.toml` / `Cargo.lock`), and Python (`pyproject.toml` / `requirements.txt`) with ecosystem PURL builders (`buildPurl`).
+  - Tracked and verified disk SHA-256 freshness across secondary manifests (`additionalManifests`) for polyglot workspaces.
+- **SLSA v1.0 Provenance Attestation Export (`src/slsa.ts`, PR #33):**
+  - Added `generateSlsaProvenance` and `verifySlsaProvenanceSignature` generating deterministic in-toto Statement v1 / SLSA Provenance v1.0 JSON envelopes signed with Ed25519.
+  - Registered MCP tool `export_slsa_provenance` (Tool 22) and CLI command `evidence-mcp slsa <bundleId>`, sharing unified workspace write boundary checks (`writeWorkspaceOutputFile` in `src/security.ts`).
+- **Release Automation & CI Action Enhancements (`.github/workflows/release.yml`, `action.yml`, PR #35):**
+  - Added tag-driven `.github/workflows/release.yml` for verification, tarball packing, conditional npm provenance publishing, and automated GitHub Release asset attachment.
+  - Extended `action.yml` with `capture-sbom`, `sbom-output`, `slsa-output`, and `slsa-builder-id` inputs.
+
+### Security
+- **Network Hardening: SSRF Blocking & Exponential Backoff (`src/network.ts`, PR #31):**
+  - Blocked loopback, RFC1918 private IPs, CGNAT, link-local/metadata endpoints, IPv6 ULA/loopback/IPv4-mapped ranges, internal DNS resolutions, embedded URL credentials, and redirects by default unless `allowPrivateNetwork: true` (`--allow-private-network`) is explicitly set.
+  - Added bounded retry with exponential backoff + jitter for transient network failures and `408`/`429`/`5xx` HTTP responses.
+  - Expanded total test suite to 196 passing tests across 22 test files (100% green).
+
 ## [1.3.0] - 2026-11-11
 
 ### Added
