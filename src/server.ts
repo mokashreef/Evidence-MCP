@@ -1120,9 +1120,11 @@ export function createEvidenceServer(): McpServer {
       includeProof: z.boolean().default(false).describe('Generate and attach portable Ed25519 verification proof.'),
       headers: z.record(z.string(), z.string()).optional().describe('Optional additional HTTP request headers.'),
       timeoutMs: z.number().int().min(1000).max(60000).default(10000).describe('Network timeout in milliseconds.'),
+      allowPrivateNetwork: z.boolean().default(false).describe('Permit local/private/loopback network webhook targets (disabled by default for SSRF protection).'),
+      maxRetries: z.number().int().min(0).max(5).default(2).describe('Maximum transient failure retry attempts with exponential backoff.'),
       workspacePath: z.string().optional().describe('Optional workspace path hint to locate the bundle.'),
     },
-    async ({ bundleId, webhookUrl, secretToken, includeProof, headers, timeoutMs, workspacePath }) => {
+    async ({ bundleId, webhookUrl, secretToken, includeProof, headers, timeoutMs, allowPrivateNetwork, maxRetries, workspacePath }) => {
       try {
         const result = await dispatchAuditWebhook({
           bundleId,
@@ -1131,6 +1133,8 @@ export function createEvidenceServer(): McpServer {
           includeProof,
           headers,
           timeoutMs,
+          allowPrivateNetwork,
+          maxRetries,
           workspacePath,
         });
 
@@ -1362,15 +1366,19 @@ export function createEvidenceServer(): McpServer {
       notaryUrl: z.string().url().describe('HTTP or HTTPS URL of the transparency notary service.'),
       authToken: z.string().optional().describe('Optional Bearer authentication token for the notary endpoint.'),
       timeoutMs: z.number().int().min(500).max(60000).optional().describe('Optional HTTP timeout in ms.'),
+      allowPrivateNetwork: z.boolean().default(false).describe('Permit local/private/loopback network notary targets (disabled by default for SSRF protection).'),
+      maxRetries: z.number().int().min(0).max(5).optional().describe('Maximum transient failure retry attempts with exponential backoff.'),
       workspacePath: z.string().optional().describe('Optional workspace path hint.'),
     },
-    async ({ bundleId, notaryUrl, authToken, timeoutMs, workspacePath }) => {
+    async ({ bundleId, notaryUrl, authToken, timeoutMs, allowPrivateNetwork, maxRetries, workspacePath }) => {
       try {
         const res = await notarizeEvidenceBundle({
           bundleId,
           notaryUrl,
           authToken,
           timeoutMs,
+          allowPrivateNetwork,
+          maxRetries,
           workspacePath,
         });
 

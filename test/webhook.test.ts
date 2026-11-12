@@ -122,6 +122,7 @@ describe('Webhook Audit & Notification System', () => {
         bundleId: bundle.id,
         webhookUrl: targetUrl,
         secretToken: secret,
+        allowPrivateNetwork: true,
         workspacePath: tempWorkspace,
       });
 
@@ -152,6 +153,8 @@ describe('Webhook Audit & Notification System', () => {
       const result = await dispatchAuditWebhook({
         bundleId: bundle.id,
         webhookUrl: targetUrl,
+        allowPrivateNetwork: true,
+        maxRetries: 0,
         workspacePath: tempWorkspace,
       });
 
@@ -170,6 +173,8 @@ describe('Webhook Audit & Notification System', () => {
         bundleId: bundle.id,
         webhookUrl: targetUrl,
         timeoutMs: 500, // fast timeout
+        allowPrivateNetwork: true,
+        maxRetries: 0,
         workspacePath: tempWorkspace,
       });
 
@@ -200,6 +205,7 @@ describe('Webhook Audit & Notification System', () => {
         targetUrl,
         '--secret',
         'cli-secret',
+        '--allow-private-network',
         '--workspace',
         tempWorkspace,
       ]);

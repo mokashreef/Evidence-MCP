@@ -149,6 +149,7 @@ describe('Remote Transparency Notary Attestation', () => {
       bundleId: bundle.id,
       notaryUrl,
       authToken: 'notary-bearer-xyz',
+      allowPrivateNetwork: true,
       workspacePath: tempWorkspace,
     });
 
@@ -199,6 +200,7 @@ describe('Remote Transparency Notary Attestation', () => {
       notarizeEvidenceBundle({
         bundleId: bundle.id,
         notaryUrl: `http://127.0.0.1:${serverPort}/tamper-response`,
+        allowPrivateNetwork: true,
         workspacePath: tempWorkspace,
       })
     ).rejects.toThrow(/invalid or mismatched receipt/i);
@@ -207,6 +209,8 @@ describe('Remote Transparency Notary Attestation', () => {
       notarizeEvidenceBundle({
         bundleId: bundle.id,
         notaryUrl: `http://127.0.0.1:${serverPort}/fail`,
+        allowPrivateNetwork: true,
+        maxRetries: 0,
         workspacePath: tempWorkspace,
       })
     ).rejects.toThrow(/HTTP error: 500/i);
@@ -216,6 +220,8 @@ describe('Remote Transparency Notary Attestation', () => {
         bundleId: bundle.id,
         notaryUrl: `http://127.0.0.1:${serverPort}/slow`,
         timeoutMs: 500,
+        allowPrivateNetwork: true,
+        maxRetries: 0,
         workspacePath: tempWorkspace,
       })
     ).rejects.toThrow(/timed out/i);
@@ -245,6 +251,7 @@ describe('Remote Transparency Notary Attestation', () => {
     await notarizeEvidenceBundle({
       bundleId: bundle.id,
       notaryUrl: `http://127.0.0.1:${serverPort}/notarize`,
+      allowPrivateNetwork: true,
       workspacePath: tempWorkspace,
     });
     const notarizedBundle = await loadBundle(bundle.id, tempWorkspace);
@@ -280,6 +287,7 @@ describe('Remote Transparency Notary Attestation', () => {
     const mcpRes = await (server as any)._registeredTools['notarize_evidence_bundle'].handler({
       bundleId: bundle.id,
       notaryUrl,
+      allowPrivateNetwork: true,
       workspacePath: tempWorkspace,
     });
     expect(mcpRes.isError).toBeUndefined();
@@ -294,6 +302,7 @@ describe('Remote Transparency Notary Attestation', () => {
       notaryUrl,
       '--token',
       'cli-tok',
+      '--allow-private-network',
       '--workspace',
       tempWorkspace,
     ]);
@@ -314,11 +323,13 @@ describe('Remote Transparency Notary Attestation', () => {
     await notarizeEvidenceBundle({
       bundleId: bundle.id,
       notaryUrl,
+      allowPrivateNetwork: true,
       workspacePath: tempWorkspace,
     });
     await notarizeEvidenceBundle({
       bundleId: bundle.id,
       notaryUrl,
+      allowPrivateNetwork: true,
       workspacePath: tempWorkspace,
     });
 
