@@ -466,6 +466,8 @@ export interface EvidencePolicyAttestationRules {
   requireTrustedRegistry?: boolean;
   requireNotary?: boolean;
   allowedNotaryFingerprints?: string[];
+  /** Minimum number of distinct valid notary keys required to attest the bundle. */
+  minNotaryCount?: number;
 }
 
 export const NotarizeEvidenceBundleSchema = z.object({
