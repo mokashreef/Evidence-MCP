@@ -1,4 +1,3 @@
-import fs from 'node:fs';
 import path from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
@@ -10,7 +9,7 @@ import {
   GitEvidence,
   AstEvidence,
 } from './types.js';
-import { validateWorkspacePath, assertSafeFilePath } from './security.js';
+import { validateWorkspacePath, assertSafeFilePath, writeWorkspaceOutputFile } from './security.js';
 import { computeFileSha256AndSize } from './hasher.js';
 import { captureGitState } from './git.js';
 import {
@@ -33,6 +32,7 @@ import { dispatchAuditWebhook } from './webhook.js';
 import { registerTrustedAgent, revokeTrustedAgent, listTrustedAgents } from './registry.js';
 import { captureWorkspaceSbom } from './sbom.js';
 import { notarizeEvidenceBundle } from './notary.js';
+import { generateSlsaProvenance } from './slsa.js';
 import { EvidencePolicy } from './types.js';
 
 export function createEvidenceServer(): McpServer {
@@ -1309,20 +1309,11 @@ export function createEvidenceServer(): McpServer {
 
         let exportedFile: string | undefined;
         if (outputPath) {
-          const resolvedOut = path.resolve(targetWs, outputPath);
-          const relOut = path.relative(path.resolve(targetWs), resolvedOut);
-          if (relOut.startsWith('..') || path.isAbsolute(relOut)) {
-            throw new Error(`Path traversal rejected: outputPath "${outputPath}" escapes workspace.`);
-          }
-          await fs.promises.mkdir(path.dirname(resolvedOut), { recursive: true });
-          const realParent = await fs.promises.realpath(path.dirname(resolvedOut));
-          const realWs = await fs.promises.realpath(path.resolve(targetWs));
-          const relRealParent = path.relative(realWs, realParent);
-          if (relRealParent.startsWith('..') || path.isAbsolute(relRealParent)) {
-            throw new Error(`Symlink escape rejected on outputPath "${outputPath}".`);
-          }
-          await fs.promises.writeFile(resolvedOut, JSON.stringify(cycloneDxBom, null, 2), 'utf8');
-          exportedFile = resolvedOut;
+          exportedFile = await writeWorkspaceOutputFile(
+            targetWs,
+            outputPath,
+            JSON.stringify(cycloneDxBom, null, 2)
+          );
         }
 
         return {
@@ -1409,6 +1400,70 @@ export function createEvidenceServer(): McpServer {
         return {
           isError: true,
           content: [{ type: 'text', text: `Failed to notarize evidence bundle: ${message}` }],
+        };
+      }
+    }
+  );
+
+  // 22. export_slsa_provenance
+  server.tool(
+    'export_slsa_provenance',
+    'Generates and optionally Ed25519-signs an in-toto v1 / SLSA v1.0 Provenance attestation envelope from an evidence bundle.',
+    {
+      bundleId: z.string().min(1).describe('The unique identifier of the evidence bundle.'),
+      builderId: z.string().optional().describe('Optional SLSA builder ID URI override.'),
+      sign: z.boolean().default(true).describe('Sign the SLSA statement with Ed25519 keypair (default: true).'),
+      outputPath: z
+        .string()
+        .optional()
+        .describe('Optional relative path inside the workspace to write the SLSA provenance JSON.'),
+      workspacePath: z.string().optional().describe('Optional workspace path hint.'),
+    },
+    async ({ bundleId, builderId, sign, outputPath, workspacePath }) => {
+      try {
+        const bundle = await loadBundle(bundleId, workspacePath);
+        const envelope = await generateSlsaProvenance({
+          bundle,
+          builderId,
+          includeSignature: sign,
+        });
+
+        let exportedFile: string | undefined;
+        if (outputPath) {
+          exportedFile = await writeWorkspaceOutputFile(
+            bundle.workspacePath,
+            outputPath,
+            JSON.stringify(envelope, null, 2)
+          );
+        }
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  bundleId,
+                  predicateType: envelope.statement.predicateType,
+                  statementDigest: envelope.statementDigest,
+                  subjectCount: envelope.statement.subject.length,
+                  dependencyCount: envelope.statement.predicate.buildDefinition.resolvedDependencies.length,
+                  signed: Boolean(envelope.signature),
+                  keyFingerprint: envelope.signature?.keyFingerprint || null,
+                  exportedFile: exportedFile || null,
+                  provenance: envelope,
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `Failed to export SLSA provenance: ${message}` }],
         };
       }
     }

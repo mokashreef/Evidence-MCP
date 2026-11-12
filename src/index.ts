@@ -18,4 +18,5 @@ export * from './registry.js';
 export * from './sbom.js';
 export * from './network.js';
 export * from './notary.js';
+export * from './slsa.js';
 export { runCli, printHelp } from './cli.js';

@@ -55,7 +55,8 @@ describe('Evidence MCP Server Tools Integration', () => {
     expect(names).toContain('revoke_trusted_agent');
     expect(names).toContain('capture_sbom_evidence');
     expect(names).toContain('notarize_evidence_bundle');
-    expect(names.length).toBe(21);
+    expect(names).toContain('export_slsa_provenance');
+    expect(names.length).toBe(22);
   });
 
   it('executes the full end-to-end evidence lifecycle successfully', async () => {
