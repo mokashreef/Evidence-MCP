@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
-import { captureWorkspaceSbom, buildNpmPurl } from '../src/sbom.js';
+import { captureWorkspaceSbom, buildNpmPurl, buildPurl } from '../src/sbom.js';
 import { signEvidenceBundle, verifyBundleAttestation } from '../src/attestation.js';
 import { verifyEvidenceBundle } from '../src/verifier.js';
 import { evaluateEvidencePolicy } from '../src/policy.js';
@@ -261,5 +261,157 @@ describe('Signed CycloneDX SBOM Integration', () => {
     const cliBom = JSON.parse(await fs.promises.readFile(cliBomOut, 'utf8'));
     expect(cliBom.bomFormat).toBe('CycloneDX');
     expect(cliBom.components.length).toBe(2);
+  });
+
+  it('captures Go (go.mod + go.sum) and Rust (Cargo.toml + Cargo.lock) SBOMs with accurate PURLs', async () => {
+    // 1. Go project
+    await fs.promises.writeFile(
+      path.join(tempWorkspace, 'go.mod'),
+      `module github.com/acme/service
+
+go 1.22
+
+require (
+	github.com/gin-gonic/gin v1.9.1
+	golang.org/x/crypto v0.21.0 // indirect
+)
+`,
+      'utf8'
+    );
+    await fs.promises.writeFile(
+      path.join(tempWorkspace, 'go.sum'),
+      `github.com/gin-gonic/gin v1.9.1 h1:ginhash==\n`,
+      'utf8'
+    );
+
+    const goSbom = await captureWorkspaceSbom({ workspacePath: tempWorkspace });
+    expect(goSbom.evidence.ecosystem).toBe('golang');
+    expect(goSbom.evidence.manifestPath).toBe('go.mod');
+    expect(goSbom.evidence.lockfilePath).toBe('go.sum');
+    expect(goSbom.evidence.componentCount).toBe(2);
+    expect(goSbom.evidence.components.find((c) => c.name === 'github.com/gin-gonic/gin')?.purl).toBe(
+      buildPurl('golang', 'github.com/gin-gonic/gin', 'v1.9.1')
+    );
+    expect(goSbom.evidence.components.find((c) => c.name === 'github.com/gin-gonic/gin')?.integrity).toBe(
+      'h1:ginhash=='
+    );
+
+    // 2. Rust project in isolated subfolder
+    const rustDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'evidence-sbom-rust-'));
+    try {
+      await fs.promises.writeFile(
+        path.join(rustDir, 'Cargo.toml'),
+        `[package]
+name = "my-rust-bin"
+version = "0.4.0"
+
+[dependencies]
+serde = "1.0.197"
+`,
+        'utf8'
+      );
+      await fs.promises.writeFile(
+        path.join(rustDir, 'Cargo.lock'),
+        `version = 3
+
+[[package]]
+name = "my-rust-bin"
+version = "0.4.0"
+
+[[package]]
+name = "serde"
+version = "1.0.197"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "${'a'.repeat(64)}"
+`,
+        'utf8'
+      );
+
+      const rustSbom = await captureWorkspaceSbom({ workspacePath: rustDir });
+      expect(rustSbom.evidence.ecosystem).toBe('cargo');
+      expect(rustSbom.evidence.manifestPath).toBe('Cargo.toml');
+      expect(rustSbom.evidence.lockfilePath).toBe('Cargo.lock');
+      expect(rustSbom.evidence.componentCount).toBe(1);
+      expect(rustSbom.evidence.components[0].purl).toBe('pkg:cargo/serde@1.0.197');
+      expect((rustSbom.cycloneDxBom.components as any[])[0].hashes).toEqual([
+        { alg: 'SHA-256', content: 'a'.repeat(64) },
+      ]);
+    } finally {
+      await fs.promises.rm(rustDir, { recursive: true, force: true });
+    }
+  });
+
+  it('captures Python & polyglot multi-ecosystem SBOMs and detects secondary manifest staleness', async () => {
+    await writeManifestAndLockfile();
+    await fs.promises.writeFile(
+      path.join(tempWorkspace, 'pyproject.toml'),
+      `[project]
+name = "polyglot-ai"
+version = "0.2.0"
+dependencies = [
+  "FastAPI==0.110.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest_asyncio>=0.23.0",
+]
+`,
+      'utf8'
+    );
+    await fs.promises.writeFile(
+      path.join(tempWorkspace, 'requirements.txt'),
+      `# Core runtime dep\nrequests==2.31.0 ; python_version >= "3.10"\n`,
+      'utf8'
+    );
+
+    const mixedAll = await captureWorkspaceSbom({
+      workspacePath: tempWorkspace,
+      includeDevDependencies: true,
+    });
+    expect(mixedAll.evidence.ecosystem).toBe('mixed');
+    expect(mixedAll.evidence.manifestPath).toBe('package.json');
+    expect(mixedAll.evidence.additionalManifests?.map((m) => m.path)).toEqual([
+      'pyproject.toml',
+      'requirements.txt',
+    ]);
+    // 3 npm + FastAPI + pytest_asyncio + requests = 6
+    expect(mixedAll.evidence.componentCount).toBe(6);
+    expect(mixedAll.evidence.components.find((c) => c.name === 'pytest_asyncio')?.purl).toBe(
+      'pkg:pypi/pytest-asyncio@0.23.0'
+    );
+
+    // Excluding dev filters vitest (npm) and pytest_asyncio (pypi dev group)
+    const prodOnly = await captureWorkspaceSbom({
+      workspacePath: tempWorkspace,
+      includeDevDependencies: false,
+    });
+    expect(prodOnly.evidence.componentCount).toBe(4);
+
+    // Verifies cleanly, then marks stale if secondary manifest (requirements.txt) is modified
+    const now = new Date().toISOString();
+    const bundle: EvidenceBundle = {
+      id: generateId('bundle'),
+      task: 'Polyglot SBOM verification',
+      workspacePath: tempWorkspace,
+      status: 'in_progress',
+      createdAt: now,
+      updatedAt: now,
+      evidence: { sbom: [mixedAll.evidence] },
+      assertions: [
+        {
+          id: generateId('assert'),
+          claim: 'Polyglot dependencies captured in SBOM',
+          evidenceIds: [mixedAll.evidence.id],
+          createdAt: now,
+        },
+      ],
+    };
+    expect((await verifyEvidenceBundle(bundle)).status).toBe('verified');
+
+    await fs.promises.appendFile(path.join(tempWorkspace, 'requirements.txt'), 'uvicorn==0.29.0\n', 'utf8');
+    const staleRes = await verifyEvidenceBundle(bundle);
+    expect(staleRes.status).toBe('stale');
+    expect(staleRes.reasons[0]).toContain('requirements.txt changed on disk');
   });
 });

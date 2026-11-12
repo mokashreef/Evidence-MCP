@@ -126,11 +126,13 @@ export interface SbomEvidence {
   type: 'sbom';
   capturedAt: string;
   format: 'cyclonedx-1.5';
+  ecosystem?: 'npm' | 'golang' | 'cargo' | 'pypi' | 'mixed';
   workspaceName?: string;
   manifestPath: string;
   manifestSha256: string;
   lockfilePath?: string;
   lockfileSha256?: string;
+  additionalManifests?: Array<{ path: string; sha256: string }>;
   componentCount: number;
   components: SbomComponent[];
   licenseSummary: Record<string, number>;

@@ -489,7 +489,43 @@ export async function verifyEvidenceBundle(bundle: EvidenceBundle): Promise<Veri
           }
         }
 
-        if (!lockfileStale) {
+        let additionalStale = false;
+        if (!lockfileStale && sbomEv.additionalManifests && sbomEv.additionalManifests.length > 0) {
+          for (const extra of sbomEv.additionalManifests) {
+            const extraSafe = assertSafeFilePath(targetWs, extra.path);
+            if (!fs.existsSync(extraSafe.absolutePath)) {
+              additionalStale = true;
+              items.push({
+                id: sbomEv.id,
+                type: 'sbom',
+                status: 'stale',
+                target: extra.path,
+                details: `Secondary SBOM manifest removed from disk: ${extra.path}${wsTag}`,
+              });
+              evidenceStatusMap.set(sbomEv.id, 'stale');
+              reasons.push(`SBOM (${sbomEv.id}) is stale: ${extra.path} removed.`);
+              break;
+            }
+            const currentExtra = await computeFileSha256AndSize(extraSafe.absolutePath);
+            if (currentExtra.sha256 !== extra.sha256) {
+              additionalStale = true;
+              items.push({
+                id: sbomEv.id,
+                type: 'sbom',
+                status: 'stale',
+                target: extra.path,
+                details: `Secondary SBOM manifest modified on disk (${extra.path})${wsTag}`,
+                expected: extra.sha256,
+                actual: currentExtra.sha256,
+              });
+              evidenceStatusMap.set(sbomEv.id, 'stale');
+              reasons.push(`SBOM (${sbomEv.id}) is stale: ${extra.path} changed on disk.`);
+              break;
+            }
+          }
+        }
+
+        if (!lockfileStale && !additionalStale) {
           items.push({
             id: sbomEv.id,
             type: 'sbom',
