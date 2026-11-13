@@ -1402,6 +1402,9 @@ export async function runCli(args: string[]): Promise<number> {
         includeSignature: sign,
       });
 
+      bundle.slsaProvenance = envelope;
+      await saveBundle(bundle);
+
       const jsonText = JSON.stringify(envelope, null, 2);
       if (outputFile) {
         const resolvedOut = path.resolve(outputFile);

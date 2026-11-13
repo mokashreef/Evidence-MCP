@@ -1428,6 +1428,9 @@ export function createEvidenceServer(): McpServer {
           includeSignature: sign,
         });
 
+        bundle.slsaProvenance = envelope;
+        await saveBundle(bundle);
+
         let exportedFile: string | undefined;
         if (outputPath) {
           exportedFile = await writeWorkspaceOutputFile(

@@ -1028,6 +1028,8 @@ export function formatSarifReport(
           ? 'package.json'
           : evalItem.category === 'sbom'
           ? 'package-lock.json'
+          : evalItem.category === 'slsa'
+          ? 'provenance.intoto.json'
           : 'evidence.policy.json';
 
       results.push({
