@@ -16,6 +16,7 @@ import { saveBundle } from '../src/storage.js';
 import { runCli } from '../src/cli.js';
 import { signEvidenceBundle, generateAgentKeyPair } from '../src/attestation.js';
 import { createPeerEndorsement } from '../src/consensus.js';
+import { generateSlsaProvenance } from '../src/slsa.js';
 
 describe('Automated Evidence Policy Engine', () => {
   let tempWorkspace: string;
@@ -346,6 +347,134 @@ describe('Automated Evidence Policy Engine', () => {
       result = evaluateEvidencePolicy({ bundle, policy });
       expect(result.passed).toBe(true);
       expect(result.evaluations.filter((e) => e.category === 'license').every((e) => e.passed)).toBe(true);
+    });
+
+    it('enforces SBOM requirePurls and PURL-based blockedPackages rules', () => {
+      const bundle = createMockBundle();
+      bundle.evidence.sbom = [
+        {
+          id: 'sbom_1',
+          type: 'sbom',
+          capturedAt: new Date().toISOString(),
+          format: 'cyclonedx-1.5',
+          ecosystem: 'mixed',
+          manifestPath: 'package.json',
+          manifestSha256: 'abc1234',
+          componentCount: 2,
+          components: [
+            { name: 'good-lib', version: '1.0.0', purl: 'pkg:npm/good-lib@1.0.0' },
+            { name: 'legacy-unpurl', version: '0.1.0' },
+          ],
+          licenseSummary: {},
+          bomDigest: 'bomdig123',
+        },
+      ];
+
+      // 1. requirePurls fails because legacy-unpurl lacks a purl
+      let policy: EvidencePolicy = {
+        sbom: { requirePurls: true },
+      };
+      let result = evaluateEvidencePolicy({ bundle, policy });
+      expect(result.passed).toBe(false);
+      const purlEval = result.evaluations.find((e) => e.rule === 'sbom.requirePurls');
+      expect(purlEval?.passed).toBe(false);
+      expect(purlEval?.message).toContain('without valid Package URLs');
+
+      // 2. Fix PURL -> requirePurls passes
+      bundle.evidence.sbom[0].components[1].purl = 'pkg:npm/legacy-unpurl@0.1.0';
+      result = evaluateEvidencePolicy({ bundle, policy });
+      expect(result.passed).toBe(true);
+      expect(result.evaluations.find((e) => e.rule === 'sbom.requirePurls')?.passed).toBe(true);
+
+      // 3. blockedPackages with PURL prefix
+      policy = {
+        sbom: {
+          blockedPackages: ['pkg:npm/good-lib'],
+        },
+      };
+      result = evaluateEvidencePolicy({ bundle, policy });
+      expect(result.passed).toBe(false);
+      const blockedEval = result.evaluations.find((e) => e.rule === 'sbom.blockedPackages');
+      expect(blockedEval?.passed).toBe(false);
+      expect(blockedEval?.message).toContain('pkg:npm/good-lib@1.0.0');
+    });
+
+    it('enforces SLSA v1.0 provenance policy rules (requireProvenance, requireSignature, allowedBuilderIds, minDependencies)', async () => {
+      const bundle = createMockBundle();
+
+      // 1. requireProvenance fails when slsaProvenance is missing
+      let policy: EvidencePolicy = {
+        slsa: { requireProvenance: true },
+      };
+      let result = evaluateEvidencePolicy({ bundle, policy });
+      expect(result.passed).toBe(false);
+      expect(result.evaluations.find((e) => e.rule === 'slsa.requireProvenance')?.passed).toBe(false);
+
+      // 2. Attach valid signed SLSA envelope
+      const signedEnvelope = await generateSlsaProvenance({
+        bundle,
+        builderId: 'https://github.com/my-org/builder@v1',
+        includeSignature: true,
+      });
+      bundle.slsaProvenance = signedEnvelope;
+
+      result = evaluateEvidencePolicy({ bundle, policy });
+      expect(result.passed).toBe(true);
+      expect(result.evaluations.find((e) => e.rule === 'slsa.requireProvenance')?.passed).toBe(true);
+
+      // 3. requireSignature
+      policy = {
+        slsa: { requireSignature: true },
+      };
+      result = evaluateEvidencePolicy({ bundle, policy });
+      expect(result.passed).toBe(true);
+
+      // Unsigned envelope fails requireSignature
+      const unsignedEnvelope = await generateSlsaProvenance({
+        bundle,
+        includeSignature: false,
+      });
+      bundle.slsaProvenance = unsignedEnvelope;
+      result = evaluateEvidencePolicy({ bundle, policy });
+      expect(result.passed).toBe(false);
+      expect(result.evaluations.find((e) => e.rule === 'slsa.requireSignature')?.passed).toBe(false);
+
+      // Restore signed envelope
+      bundle.slsaProvenance = signedEnvelope;
+
+      // 4. allowedBuilderIds
+      policy = {
+        slsa: {
+          allowedBuilderIds: ['https://github.com/trusted-org/builder@v2'],
+        },
+      };
+      result = evaluateEvidencePolicy({ bundle, policy });
+      expect(result.passed).toBe(false);
+      const builderEval = result.evaluations.find((e) => e.rule === 'slsa.allowedBuilderIds');
+      expect(builderEval?.passed).toBe(false);
+      expect(builderEval?.message).toContain('is not in policy allowed list');
+
+      // Matching builderId passes
+      policy = {
+        slsa: {
+          allowedBuilderIds: ['https://github.com/my-org/builder@v1'],
+        },
+      };
+      result = evaluateEvidencePolicy({ bundle, policy });
+      expect(result.passed).toBe(true);
+      expect(result.evaluations.find((e) => e.rule === 'slsa.allowedBuilderIds')?.passed).toBe(true);
+
+      // 5. minDependencies threshold
+      policy = {
+        slsa: {
+          minDependencies: 10,
+        },
+      };
+      result = evaluateEvidencePolicy({ bundle, policy });
+      expect(result.passed).toBe(false);
+      const minDepsEval = result.evaluations.find((e) => e.rule === 'slsa.minDependencies');
+      expect(minDepsEval?.passed).toBe(false);
+      expect(minDepsEval?.message).toContain('below required minimum');
     });
   });
 

@@ -154,6 +154,63 @@ export interface NotaryReceipt {
   authorKeyFingerprint?: string;
 }
 
+// ==========================================
+// SLSA v1.0 Provenance Types
+// ==========================================
+
+export interface SlsaSubject {
+  name: string;
+  digest: Record<string, string>;
+}
+
+export interface SlsaResourceDescriptor {
+  uri?: string;
+  name?: string;
+  digest?: Record<string, string>;
+  mediaType?: string;
+  annotations?: Record<string, unknown>;
+}
+
+export interface SlsaProvenanceStatement {
+  _type: string;
+  subject: SlsaSubject[];
+  predicateType: string;
+  predicate: {
+    buildDefinition: {
+      buildType: string;
+      externalParameters: Record<string, unknown>;
+      internalParameters: Record<string, unknown>;
+      resolvedDependencies: SlsaResourceDescriptor[];
+    };
+    runDetails: {
+      builder: {
+        id: string;
+        version?: Record<string, string>;
+      };
+      metadata: {
+        invocationId: string;
+        startedOn: string;
+        finishedOn?: string;
+      };
+      byproducts?: SlsaResourceDescriptor[];
+    };
+  };
+}
+
+export interface SlsaProvenanceSignature {
+  algorithm: 'ed25519';
+  publicKeyPem: string;
+  keyFingerprint: string;
+  signedAt: string;
+  signature: string;
+}
+
+export interface SlsaProvenanceEnvelope {
+  statement: SlsaProvenanceStatement;
+  statementDigest: string;
+  signature?: SlsaProvenanceSignature;
+}
+
 export interface EvidenceBundle {
   id: string;
   task: string;
@@ -166,6 +223,7 @@ export interface EvidenceBundle {
   attestation?: BundleAttestation;
   endorsements?: PeerEndorsement[];
   notaryReceipts?: NotaryReceipt[];
+  slsaProvenance?: SlsaProvenanceEnvelope;
   evidence: {
     git?: GitEvidence[];
     commands?: CommandEvidence[];
@@ -494,6 +552,14 @@ export interface EvidencePolicySbomRules {
   disallowComponentLicenses?: string[];
   blockedPackages?: string[];
   maxComponents?: number;
+  requirePurls?: boolean;
+}
+
+export interface EvidencePolicySlsaRules {
+  requireProvenance?: boolean;
+  requireSignature?: boolean;
+  allowedBuilderIds?: string[];
+  minDependencies?: number;
 }
 
 export interface EvidencePolicy {
@@ -508,6 +574,7 @@ export interface EvidencePolicy {
   consensus?: QuorumPolicy;
   license?: EvidencePolicyLicenseRules;
   sbom?: EvidencePolicySbomRules;
+  slsa?: EvidencePolicySlsaRules;
 }
 
 export interface PolicyRuleEvaluation {
@@ -521,7 +588,8 @@ export interface PolicyRuleEvaluation {
     | 'attestation'
     | 'consensus'
     | 'license'
-    | 'sbom';
+    | 'sbom'
+    | 'slsa';
   passed: boolean;
   message: string;
   severity: 'error' | 'warning';

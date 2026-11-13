@@ -1,7 +1,14 @@
 import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
-import { EvidenceBundle } from './types.js';
+import {
+  EvidenceBundle,
+  SlsaSubject,
+  SlsaResourceDescriptor,
+  SlsaProvenanceStatement,
+  SlsaProvenanceSignature,
+  SlsaProvenanceEnvelope,
+} from './types.js';
 import {
   canonicalStringify,
   computeKeyFingerprint,
@@ -12,59 +19,6 @@ import { buildNpmPurl } from './sbom.js';
 
 export const IN_TOTO_STATEMENT_V1_TYPE = 'https://in-toto.io/Statement/v1';
 export const SLSA_PROVENANCE_V1_PREDICATE_TYPE = 'https://slsa.dev/provenance/v1';
-
-export interface SlsaSubject {
-  name: string;
-  digest: Record<string, string>;
-}
-
-export interface SlsaResourceDescriptor {
-  uri?: string;
-  name?: string;
-  digest?: Record<string, string>;
-  mediaType?: string;
-  annotations?: Record<string, unknown>;
-}
-
-export interface SlsaProvenanceStatement {
-  _type: typeof IN_TOTO_STATEMENT_V1_TYPE;
-  subject: SlsaSubject[];
-  predicateType: typeof SLSA_PROVENANCE_V1_PREDICATE_TYPE;
-  predicate: {
-    buildDefinition: {
-      buildType: string;
-      externalParameters: Record<string, unknown>;
-      internalParameters: Record<string, unknown>;
-      resolvedDependencies: SlsaResourceDescriptor[];
-    };
-    runDetails: {
-      builder: {
-        id: string;
-        version?: Record<string, string>;
-      };
-      metadata: {
-        invocationId: string;
-        startedOn: string;
-        finishedOn?: string;
-      };
-      byproducts?: SlsaResourceDescriptor[];
-    };
-  };
-}
-
-export interface SlsaProvenanceSignature {
-  algorithm: 'ed25519';
-  publicKeyPem: string;
-  keyFingerprint: string;
-  signedAt: string;
-  signature: string;
-}
-
-export interface SlsaProvenanceEnvelope {
-  statement: SlsaProvenanceStatement;
-  statementDigest: string;
-  signature?: SlsaProvenanceSignature;
-}
 
 function normalizeHashDigest(integrity?: string): Record<string, string> | undefined {
   if (!integrity) return undefined;

@@ -11,6 +11,7 @@ import { checkBundleQuorum } from './consensus.js';
 import { verifyBundleAttestation } from './attestation.js';
 import { verifyAgentKeyStatusSync, RegistryVerificationStatus } from './registry.js';
 import { verifyNotaryReceipt } from './notary.js';
+import { verifySlsaProvenanceSignature } from './slsa.js';
 
 /**
  * Matches a relative or absolute file path against a glob-like pattern.
@@ -1005,8 +1006,13 @@ export function evaluateEvidencePolicy(options: {
       for (const sbomEv of sbomList) {
         for (const comp of sbomEv.components) {
           const id = `${comp.name}@${comp.version}`.toLowerCase();
-          if (lowerBlocked.includes(comp.name.toLowerCase()) || lowerBlocked.includes(id)) {
-            matched.push(`${comp.name}@${comp.version}`);
+          const purlLower = comp.purl ? comp.purl.toLowerCase() : '';
+          const isBlocked =
+            lowerBlocked.includes(comp.name.toLowerCase()) ||
+            lowerBlocked.includes(id) ||
+            (purlLower && lowerBlocked.some((b) => purlLower === b || purlLower.startsWith(b)));
+          if (isBlocked) {
+            matched.push(comp.purl || `${comp.name}@${comp.version}`);
           }
         }
       }
@@ -1031,6 +1037,36 @@ export function evaluateEvidencePolicy(options: {
       }
     }
 
+    if (policy.sbom.requirePurls && sbomList.length > 0) {
+      const missing: string[] = [];
+      for (const sbomEv of sbomList) {
+        for (const comp of sbomEv.components) {
+          if (!comp.purl || typeof comp.purl !== 'string' || comp.purl.trim() === '') {
+            missing.push(`${comp.name}@${comp.version}`);
+          }
+        }
+      }
+
+      if (missing.length > 0) {
+        evaluations.push({
+          rule: 'sbom.requirePurls',
+          category: 'sbom',
+          passed: false,
+          severity: 'error',
+          message: `SBOM contains ${missing.length} component(s) without valid Package URLs (PURLs): [${missing.slice(0, 5).join(', ')}]`,
+          details: { missingCount: missing.length, samples: missing.slice(0, 5) },
+        });
+      } else {
+        evaluations.push({
+          rule: 'sbom.requirePurls',
+          category: 'sbom',
+          passed: true,
+          severity: 'error',
+          message: 'All recorded SBOM components have valid Package URLs (PURLs).',
+        });
+      }
+    }
+
     if (typeof maxComponents === 'number' && sbomList.length > 0) {
       const exceeding = sbomList.filter((s) => s.componentCount > maxComponents);
       if (exceeding.length > 0) {
@@ -1050,6 +1086,140 @@ export function evaluateEvidencePolicy(options: {
           severity: 'warning',
           message: `SBOM component count within limit (${maxComponents}).`,
         });
+      }
+    }
+  }
+
+  // 10. SLSA Provenance Rules
+  if (policy.slsa) {
+    const slsaProvenance = bundle.slsaProvenance;
+
+    if (policy.slsa.requireProvenance) {
+      if (!slsaProvenance) {
+        evaluations.push({
+          rule: 'slsa.requireProvenance',
+          category: 'slsa',
+          passed: false,
+          severity: 'error',
+          message: 'Policy requires SLSA v1.0 provenance attestation envelope, but none was recorded in this bundle.',
+        });
+      } else {
+        const verifyRes = verifySlsaProvenanceSignature(slsaProvenance);
+        if (!verifyRes.valid) {
+          evaluations.push({
+            rule: 'slsa.requireProvenance',
+            category: 'slsa',
+            passed: false,
+            severity: 'error',
+            message: `SLSA v1.0 provenance statement signature is invalid: ${verifyRes.reason}`,
+          });
+        } else {
+          evaluations.push({
+            rule: 'slsa.requireProvenance',
+            category: 'slsa',
+            passed: true,
+            severity: 'error',
+            message: `SLSA v1.0 provenance attestation verified successfully (Predicate: ${slsaProvenance.statement.predicateType}).`,
+          });
+        }
+      }
+    }
+
+    if (policy.slsa.requireSignature) {
+      if (!slsaProvenance) {
+        evaluations.push({
+          rule: 'slsa.requireSignature',
+          category: 'slsa',
+          passed: false,
+          severity: 'error',
+          message: 'Policy requires signed SLSA provenance attestation, but no SLSA provenance envelope was recorded.',
+        });
+      } else if (!slsaProvenance.signature) {
+        evaluations.push({
+          rule: 'slsa.requireSignature',
+          category: 'slsa',
+          passed: false,
+          severity: 'error',
+          message: 'SLSA provenance envelope is present but lacks an Ed25519 signature.',
+        });
+      } else {
+        evaluations.push({
+          rule: 'slsa.requireSignature',
+          category: 'slsa',
+          passed: true,
+          severity: 'error',
+          message: `SLSA provenance envelope signed by Ed25519 key (Fingerprint: ${slsaProvenance.signature.keyFingerprint}).`,
+        });
+      }
+    }
+
+    if (policy.slsa.allowedBuilderIds && policy.slsa.allowedBuilderIds.length > 0) {
+      if (!slsaProvenance) {
+        evaluations.push({
+          rule: 'slsa.allowedBuilderIds',
+          category: 'slsa',
+          passed: false,
+          severity: 'error',
+          message: 'No SLSA provenance envelope recorded; cannot verify builder ID against allowed list.',
+        });
+      } else {
+        const builderId = slsaProvenance.statement.predicate?.runDetails?.builder?.id || '';
+        const isAllowed = policy.slsa.allowedBuilderIds.includes(builderId);
+        if (!isAllowed) {
+          evaluations.push({
+            rule: 'slsa.allowedBuilderIds',
+            category: 'slsa',
+            passed: false,
+            severity: 'error',
+            message: `SLSA builder ID "${builderId}" is not in policy allowed list: [${policy.slsa.allowedBuilderIds.join(', ')}].`,
+            details: { builderId, allowedBuilderIds: policy.slsa.allowedBuilderIds },
+          });
+        } else {
+          evaluations.push({
+            rule: 'slsa.allowedBuilderIds',
+            category: 'slsa',
+            passed: true,
+            severity: 'error',
+            message: `SLSA builder ID "${builderId}" is authorized by policy.`,
+            details: { builderId },
+          });
+        }
+      }
+    }
+
+    if (typeof policy.slsa.minDependencies === 'number') {
+      const minDeps = policy.slsa.minDependencies;
+      if (!slsaProvenance) {
+        evaluations.push({
+          rule: 'slsa.minDependencies',
+          category: 'slsa',
+          passed: false,
+          severity: 'error',
+          message: `No SLSA provenance recorded to check minimum resolved dependencies (required >= ${minDeps}).`,
+          details: { requiredMinDependencies: minDeps },
+        });
+      } else {
+        const resolvedDeps =
+          slsaProvenance.statement.predicate?.buildDefinition?.resolvedDependencies || [];
+        if (resolvedDeps.length < minDeps) {
+          evaluations.push({
+            rule: 'slsa.minDependencies',
+            category: 'slsa',
+            passed: false,
+            severity: 'error',
+            message: `SLSA resolved dependencies count (${resolvedDeps.length}) is below required minimum (${minDeps}).`,
+            details: { currentCount: resolvedDeps.length, requiredMinDependencies: minDeps },
+          });
+        } else {
+          evaluations.push({
+            rule: 'slsa.minDependencies',
+            category: 'slsa',
+            passed: true,
+            severity: 'error',
+            message: `SLSA resolved dependencies count (${resolvedDeps.length}) satisfies policy requirement (>= ${minDeps}).`,
+            details: { currentCount: resolvedDeps.length, requiredMinDependencies: minDeps },
+          });
+        }
       }
     }
   }
