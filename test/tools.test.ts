@@ -56,7 +56,8 @@ describe('Evidence MCP Server Tools Integration', () => {
     expect(names).toContain('capture_sbom_evidence');
     expect(names).toContain('notarize_evidence_bundle');
     expect(names).toContain('export_slsa_provenance');
-    expect(names.length).toBe(22);
+    expect(names).toContain('generate_client_config');
+    expect(names.length).toBe(23);
   });
 
   it('executes the full end-to-end evidence lifecycle successfully', async () => {
@@ -308,5 +309,38 @@ describe('Evidence MCP Server Tools Integration', () => {
     expect(gitData.branch).toBe('main');
     expect(gitData.headCommit).toBeDefined();
     expect(gitData.isClean).toBe(true);
+  });
+
+  it('generates and writes client configuration via generate_client_config tool', async () => {
+    // 1. Generate snippet
+    const genRes = (await client.callTool({
+      name: 'generate_client_config',
+      arguments: {
+        client: 'cursor',
+        workspacePath: tempWorkspace,
+        useGlobalBinary: true,
+      },
+    })) as { content: [{ type: 'text'; text: string }] };
+
+    const genData = JSON.parse(genRes.content[0].text);
+    expect(genData.client).toBe('cursor');
+    expect(genData.command).toBe('evidence-mcp');
+    expect(genData.configSnippet.mcpServers.evidence).toBeDefined();
+
+    // 2. Write snippet to custom file
+    const targetFile = path.join(tempWorkspace, '.cursor', 'mcp.json');
+    const writeRes = (await client.callTool({
+      name: 'generate_client_config',
+      arguments: {
+        client: 'cursor',
+        workspacePath: tempWorkspace,
+        outputPath: targetFile,
+        write: true,
+      },
+    })) as { content: [{ type: 'text'; text: string }] };
+
+    const writeData = JSON.parse(writeRes.content[0].text);
+    expect(writeData.writtenToPath).toBe(targetFile);
+    expect(fs.existsSync(targetFile)).toBe(true);
   });
 });

@@ -785,3 +785,49 @@ export interface SarifReport {
     results: SarifResult[];
   }>;
 }
+
+// ==========================================
+// MCP Client Configuration Generator Types (v1.5.0)
+// ==========================================
+
+export type SupportedMcpClient = 'claude' | 'cursor' | 'gemini' | 'vscode-cline';
+
+export interface GenerateClientConfigOptions {
+  client: SupportedMcpClient;
+  workspacePath?: string;
+  serverName?: string;
+  useGlobalBinary?: boolean;
+  cliScriptPath?: string;
+  environmentVariables?: Record<string, string>;
+}
+
+export interface ClientConfigResult {
+  client: SupportedMcpClient;
+  serverName: string;
+  targetConfigPath: string;
+  configSnippet: Record<string, unknown>;
+  command: string;
+  args: string[];
+  env?: Record<string, string>;
+}
+
+export interface WriteClientConfigOptions extends GenerateClientConfigOptions {
+  targetPath?: string;
+  force?: boolean;
+}
+
+export interface WriteClientConfigResult extends ClientConfigResult {
+  writtenToPath: string;
+  mergedWithExisting: boolean;
+  totalServersInFile: number;
+}
+
+export const GenerateClientConfigSchema = z.object({
+  client: z.enum(['claude', 'cursor', 'gemini', 'vscode-cline']).describe('The target AI client.'),
+  workspacePath: z.string().optional().describe('Workspace path hint for evidence collection.'),
+  serverName: z.string().default('evidence').describe('MCP server entry name (default: "evidence").'),
+  useGlobalBinary: z.boolean().default(false).describe('Use "evidence-mcp" binary instead of node dist/cli.js.'),
+  outputPath: z.string().optional().describe('Optional custom path to write/merge the client config.'),
+  write: z.boolean().default(false).describe('Write or merge directly into the client configuration file.'),
+});
+export type GenerateClientConfigInput = z.infer<typeof GenerateClientConfigSchema>;
