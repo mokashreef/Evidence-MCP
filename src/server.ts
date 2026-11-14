@@ -34,6 +34,7 @@ import { captureWorkspaceSbom } from './sbom.js';
 import { notarizeEvidenceBundle } from './notary.js';
 import { generateSlsaProvenance } from './slsa.js';
 import { generateClientConfig, writeClientConfig } from './client-config.js';
+import { submitRekorLogEntry } from './rekor.js';
 import { EvidencePolicy } from './types.js';
 
 export function createEvidenceServer(): McpServer {
@@ -1533,6 +1534,61 @@ export function createEvidenceServer(): McpServer {
         return {
           isError: true,
           content: [{ type: 'text', text: `Failed to generate client configuration: ${message}` }],
+        };
+      }
+    }
+  );
+
+  // 24. submit_rekor_entry
+  server.tool(
+    'submit_rekor_entry',
+    'Submits an evidence bundle digest and attestation signature to a Sigstore Rekor transparency log (default: rekor.sigstore.dev).',
+    {
+      bundleId: z.string().min(1).describe('The unique identifier of the evidence bundle to log.'),
+      rekorUrl: z.string().url().default('https://rekor.sigstore.dev').describe('Rekor transparency log server URL.'),
+      timeoutMs: z.number().int().min(500).max(60000).optional().describe('Network timeout in ms (default: 15000).'),
+      allowPrivateNetwork: z.boolean().default(false).describe('Allow private network / localhost endpoints (for test harnesses).'),
+      maxRetries: z.number().int().min(0).max(5).default(2).describe('Max backoff retries on transient errors.'),
+      workspacePath: z.string().optional().describe('Optional workspace path hint.'),
+    },
+    async ({ bundleId, rekorUrl, timeoutMs, allowPrivateNetwork, maxRetries, workspacePath }) => {
+      try {
+        const res = await submitRekorLogEntry({
+          bundleId,
+          rekorUrl,
+          timeoutMs,
+          allowPrivateNetwork,
+          maxRetries,
+          workspacePath,
+        });
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  bundleId,
+                  uuid: res.receipt.uuid,
+                  rekorUrl: res.receipt.rekorUrl,
+                  logIndex: res.receipt.logIndex,
+                  logID: res.receipt.logID,
+                  integratedTime: res.receipt.integratedTime,
+                  inclusionProof: Boolean(res.receipt.inclusionProof),
+                  alreadyExists: res.alreadyExists,
+                  receipt: res.receipt,
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `Failed to submit Rekor log entry: ${message}` }],
         };
       }
     }

@@ -20,4 +20,5 @@ export * from './network.js';
 export * from './notary.js';
 export * from './slsa.js';
 export * from './client-config.js';
+export * from './rekor.js';
 export { runCli, printHelp } from './cli.js';

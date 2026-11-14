@@ -211,6 +211,27 @@ export interface SlsaProvenanceEnvelope {
   signature?: SlsaProvenanceSignature;
 }
 
+export interface RekorInclusionProof {
+  logIndex: number;
+  rootHash: string;
+  treeSize: number;
+  hashes: string[];
+  checkpoint?: string;
+}
+
+export interface RekorEntryReceipt {
+  uuid: string;
+  bundleId: string;
+  bundleDigest: string;
+  rekorUrl: string;
+  logIndex: number;
+  logID: string;
+  integratedTime: number;
+  signedEntryTimestamp: string;
+  inclusionProof?: RekorInclusionProof;
+  recordedAt: string;
+}
+
 export interface EvidenceBundle {
   id: string;
   task: string;
@@ -223,6 +244,7 @@ export interface EvidenceBundle {
   attestation?: BundleAttestation;
   endorsements?: PeerEndorsement[];
   notaryReceipts?: NotaryReceipt[];
+  rekorEntries?: RekorEntryReceipt[];
   slsaProvenance?: SlsaProvenanceEnvelope;
   evidence: {
     git?: GitEvidence[];
@@ -528,6 +550,12 @@ export interface EvidencePolicyAttestationRules {
   allowedNotaryFingerprints?: string[];
   /** Minimum number of distinct valid notary keys required to attest the bundle. */
   minNotaryCount?: number;
+  /** Require entry recorded in a Sigstore Rekor transparency log. */
+  requireRekor?: boolean;
+  /** Minimum number of distinct Rekor log entries required. */
+  minRekorCount?: number;
+  /** Allowed Rekor Log IDs (hex/base64). */
+  allowedRekorLogIds?: string[];
 }
 
 export const NotarizeEvidenceBundleSchema = z.object({
@@ -540,6 +568,16 @@ export const NotarizeEvidenceBundleSchema = z.object({
   workspacePath: z.string().optional(),
 });
 export type NotarizeEvidenceBundleInput = z.infer<typeof NotarizeEvidenceBundleSchema>;
+
+export const SubmitRekorEntrySchema = z.object({
+  bundleId: z.string().min(1, 'bundleId is required.'),
+  rekorUrl: z.string().url('rekorUrl must be a valid URL.').default('https://rekor.sigstore.dev'),
+  timeoutMs: z.number().int().min(500).max(60000).optional(),
+  allowPrivateNetwork: z.boolean().optional(),
+  maxRetries: z.number().int().min(0).max(5).optional(),
+  workspacePath: z.string().optional(),
+});
+export type SubmitRekorEntryInput = z.infer<typeof SubmitRekorEntrySchema>;
 
 export interface EvidencePolicyLicenseRules {
   requireLicenseField?: boolean;
