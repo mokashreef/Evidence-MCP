@@ -17,6 +17,7 @@ import { captureWorkspaceSbom } from './sbom.js';
 import { notarizeEvidenceBundle } from './notary.js';
 import { generateSlsaProvenance } from './slsa.js';
 import { generateClientConfig, writeClientConfig } from './client-config.js';
+import { submitRekorLogEntry, verifyRekorEntryReceipt, DEFAULT_REKOR_URL } from './rekor.js';
 import {
   CommandEvidence,
   VerificationProof,
@@ -61,6 +62,8 @@ Usage:
   evidence-mcp notarize <bundleId> <notaryUrl>      Anchor bundle digest to a remote transparency notary
   evidence-mcp slsa <bundleId> [options]            Export SLSA v1.0 provenance attestation envelope
   evidence-mcp client config <client> [options]     Generate or write MCP client config (claude|cursor|gemini|vscode-cline)
+  evidence-mcp rekor submit <bundleId> [url]        Submit bundle attestation to Sigstore Rekor transparency log
+  evidence-mcp rekor verify <bundleId> [options]    Verify attached Rekor entries and Merkle inclusion proofs
   evidence-mcp init [options]                       Bootstrap evidence.policy.json configuration
   evidence-mcp --help, -h                           Show this help message
   evidence-mcp --version, -v                        Show version number
@@ -1514,6 +1517,106 @@ export async function runCli(args: string[]): Promise<number> {
       return 0;
     } catch (err: unknown) {
       console.error(`Client config error: ${(err as Error).message}`);
+      return 1;
+    }
+  }
+
+  // 20. Command: rekor <submit|verify> <bundleId> [options]
+  if (firstArg === 'rekor') {
+    const subAction = args[1];
+    if (subAction !== 'submit' && subAction !== 'verify') {
+      console.error('Unknown rekor sub-command. Usage: evidence-mcp rekor <submit|verify> <bundleId> [options]');
+      return 1;
+    }
+
+    const bundleId = args[2];
+    if (!bundleId || bundleId.startsWith('-')) {
+      console.error(`Error: bundleId is required for "rekor ${subAction}" command.`);
+      console.error(`Usage: evidence-mcp rekor ${subAction} <bundleId> [rekorUrl] [options]`);
+      return 1;
+    }
+
+    let rekorUrl = DEFAULT_REKOR_URL;
+    let timeoutMs = 15000;
+    let allowPrivateNetwork = false;
+    let workspace: string | undefined;
+
+    let optStart = 3;
+    if (subAction === 'submit' && args[3] && !args[3].startsWith('-')) {
+      rekorUrl = args[3];
+      optStart = 4;
+    }
+
+    for (let i = optStart; i < args.length; i++) {
+      if (args[i] === '--allow-private-network') {
+        allowPrivateNetwork = true;
+      } else if (args[i] === '--timeout' && args[i + 1]) {
+        timeoutMs = parseInt(args[++i], 10);
+      } else if ((args[i] === '--workspace' || args[i] === '-w') && args[i + 1]) {
+        workspace = args[++i];
+      }
+    }
+
+    try {
+      const bundle = await loadBundle(bundleId, workspace);
+
+      if (subAction === 'submit') {
+        const res = await submitRekorLogEntry({
+          bundleId,
+          bundle,
+          rekorUrl,
+          timeoutMs,
+          allowPrivateNetwork,
+          workspacePath: workspace,
+        });
+
+        console.log(`\nSigstore Rekor Log Entry Submitted: ${bundle.id}`);
+        console.log('='.repeat(80));
+        console.log(`UUID:          ${res.receipt.uuid}`);
+        console.log(`Rekor URL:     ${res.receipt.rekorUrl}`);
+        console.log(`Log Index:     #${res.receipt.logIndex}`);
+        console.log(`Log ID:        ${res.receipt.logID}`);
+        console.log(`Integrated:    ${new Date(res.receipt.integratedTime * 1000).toISOString()}`);
+        console.log(`Proof Status:  ${res.receipt.inclusionProof ? 'INCLUSION PROOF ATTACHED' : 'PENDING'}`);
+        console.log(`Already Exists:${res.alreadyExists ? ' YES' : ' NO (Newly Created)'}`);
+        console.log('='.repeat(80) + '\n');
+        return 0;
+      }
+
+      // verify
+      const entries = bundle.rekorEntries || [];
+      if (entries.length === 0) {
+        console.log(`\nNo Rekor transparency log entries attached to bundle "${bundle.id}".\n`);
+        return 1;
+      }
+
+      console.log(`\nVerifying Sigstore Rekor Log Entries: ${bundle.id}`);
+      console.log('='.repeat(80));
+
+      let allValid = true;
+      for (const entry of entries) {
+        const verifyRes = verifyRekorEntryReceipt({ receipt: entry, bundle });
+        const status = verifyRes.valid ? 'VALID (MATCHED)' : `INVALID: ${verifyRes.reason}`;
+        console.log(`UUID:        ${entry.uuid}`);
+        console.log(`Log URL:     ${entry.rekorUrl}`);
+        console.log(`Log Index:   #${entry.logIndex}`);
+        console.log(`Status:      ${status}`);
+        if (entry.inclusionProof) {
+          console.log(`Proof Check: ${verifyRes.inclusionVerified ? 'PASSED (RFC 6962)' : 'FAILED'}`);
+          console.log(`Root Hash:   ${entry.inclusionProof.rootHash}`);
+        }
+        console.log('-'.repeat(80));
+        if (!verifyRes.valid) {
+          allValid = false;
+        }
+      }
+
+      console.log(
+        `Summary: ${entries.length} Rekor entry/entries audited. Overall verdict: ${allValid ? 'VERIFIED' : 'FAILED'}\n`
+      );
+      return allValid ? 0 : 1;
+    } catch (err: unknown) {
+      console.error(`Rekor error: ${(err as Error).message}`);
       return 1;
     }
   }

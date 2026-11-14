@@ -57,7 +57,8 @@ describe('Evidence MCP Server Tools Integration', () => {
     expect(names).toContain('notarize_evidence_bundle');
     expect(names).toContain('export_slsa_provenance');
     expect(names).toContain('generate_client_config');
-    expect(names.length).toBe(23);
+    expect(names).toContain('submit_rekor_entry');
+    expect(names.length).toBe(24);
   });
 
   it('executes the full end-to-end evidence lifecycle successfully', async () => {

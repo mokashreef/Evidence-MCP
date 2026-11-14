@@ -12,6 +12,7 @@ import { verifyBundleAttestation } from './attestation.js';
 import { verifyAgentKeyStatusSync, RegistryVerificationStatus } from './registry.js';
 import { verifyNotaryReceipt } from './notary.js';
 import { verifySlsaProvenanceSignature } from './slsa.js';
+import { verifyRekorEntryReceipt } from './rekor.js';
 
 /**
  * Matches a relative or absolute file path against a glob-like pattern.
@@ -787,6 +788,99 @@ export function evaluateEvidencePolicy(options: {
             },
           });
         }
+      }
+    }
+
+    if (policy.attestation.requireRekor) {
+      const rekorEntries = bundle.rekorEntries || [];
+      if (rekorEntries.length === 0) {
+        evaluations.push({
+          rule: 'attestation.requireRekor',
+          category: 'attestation',
+          passed: false,
+          severity: 'error',
+          message: 'Policy requires bundle attestation to be logged in Sigstore Rekor, but no Rekor entry is attached.',
+        });
+      } else {
+        const validRekor = rekorEntries.filter((r) => {
+          const res = verifyRekorEntryReceipt({ receipt: r, bundle });
+          return res.valid;
+        });
+
+        if (validRekor.length === 0) {
+          evaluations.push({
+            rule: 'attestation.requireRekor',
+            category: 'attestation',
+            passed: false,
+            severity: 'error',
+            message: 'Attached Sigstore Rekor log entries are invalid or bundle digest mismatch.',
+          });
+        } else {
+          evaluations.push({
+            rule: 'attestation.requireRekor',
+            category: 'attestation',
+            passed: true,
+            severity: 'error',
+            message: `Verified ${validRekor.length} Sigstore Rekor log receipt(s) matching current bundle digest.`,
+          });
+        }
+      }
+    }
+
+    if (typeof policy.attestation.minRekorCount === 'number') {
+      const minCount = policy.attestation.minRekorCount;
+      const rekorEntries = bundle.rekorEntries || [];
+      const validRekor = rekorEntries.filter((r) => verifyRekorEntryReceipt({ receipt: r, bundle }).valid);
+      const distinctLogEntries = Array.from(new Set(validRekor.map((r) => r.uuid)));
+
+      if (distinctLogEntries.length < minCount) {
+        evaluations.push({
+          rule: 'attestation.minRekorCount',
+          category: 'attestation',
+          passed: false,
+          severity: 'error',
+          message: `Sigstore Rekor log quorum not met: found ${distinctLogEntries.length} valid Rekor entry/entries, require at least ${minCount}.`,
+          details: { currentCount: distinctLogEntries.length, requiredMinRekorCount: minCount },
+        });
+      } else {
+        evaluations.push({
+          rule: 'attestation.minRekorCount',
+          category: 'attestation',
+          passed: true,
+          severity: 'error',
+          message: `Sigstore Rekor log quorum satisfied (${distinctLogEntries.length} valid entry/entries, required >= ${minCount}).`,
+          details: { currentCount: distinctLogEntries.length, requiredMinRekorCount: minCount },
+        });
+      }
+    }
+
+    if (policy.attestation.allowedRekorLogIds && policy.attestation.allowedRekorLogIds.length > 0) {
+      const allowed = policy.attestation.allowedRekorLogIds.map((l) => l.toLowerCase());
+      const rekorEntries = bundle.rekorEntries || [];
+      const matching = rekorEntries.filter(
+        (r) =>
+          verifyRekorEntryReceipt({ receipt: r, bundle }).valid &&
+          allowed.includes(r.logID.toLowerCase())
+      );
+
+      if (matching.length === 0) {
+        evaluations.push({
+          rule: 'attestation.allowedRekorLogIds',
+          category: 'attestation',
+          passed: false,
+          severity: 'error',
+          message: `No valid Rekor entry signed by allowed Log ID(s): [${policy.attestation.allowedRekorLogIds.join(', ')}].`,
+          details: { allowedLogIds: policy.attestation.allowedRekorLogIds },
+        });
+      } else {
+        evaluations.push({
+          rule: 'attestation.allowedRekorLogIds',
+          category: 'attestation',
+          passed: true,
+          severity: 'error',
+          message: `Rekor log entry authorized by trusted Log ID (${matching[0].logID}).`,
+          details: { matchedLogId: matching[0].logID },
+        });
       }
     }
   }
