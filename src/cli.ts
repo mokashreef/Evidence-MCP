@@ -16,6 +16,7 @@ import { registerTrustedAgent, revokeTrustedAgent, listTrustedAgents } from './r
 import { captureWorkspaceSbom } from './sbom.js';
 import { notarizeEvidenceBundle } from './notary.js';
 import { generateSlsaProvenance } from './slsa.js';
+import { generateClientConfig, writeClientConfig } from './client-config.js';
 import {
   CommandEvidence,
   VerificationProof,
@@ -23,6 +24,7 @@ import {
   EvidencePolicy,
   PeerEndorsementRole,
   PeerEndorsementVerdict,
+  SupportedMcpClient,
 } from './types.js';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -58,6 +60,7 @@ Usage:
   evidence-mcp sbom <bundleId> [options]            Capture CycloneDX SBOM evidence for workspace
   evidence-mcp notarize <bundleId> <notaryUrl>      Anchor bundle digest to a remote transparency notary
   evidence-mcp slsa <bundleId> [options]            Export SLSA v1.0 provenance attestation envelope
+  evidence-mcp client config <client> [options]     Generate or write MCP client config (claude|cursor|gemini|vscode-cline)
   evidence-mcp init [options]                       Bootstrap evidence.policy.json configuration
   evidence-mcp --help, -h                           Show this help message
   evidence-mcp --version, -v                        Show version number
@@ -67,6 +70,9 @@ Options:
   --preset <profile>       Policy preset for init: recommended, strict, or permissive
   --force, -f              Overwrite existing policy file during init
   --no-gitignore           Skip adding .evidence-mcp/ to .gitignore during init
+  --write                  Write or merge directly into target client configuration file
+  --global-bin             Configure server to run global "evidence-mcp" binary instead of node script
+  --server-name <name>     Custom server entry name in config (default: "evidence")
   --format, -f <format>    Report format: markdown, json, html, or sarif (default: markdown)
   --output, -o <file>      Write exported report, proof, or summary directly to file
   --key, -k <file>         Private key file for Ed25519 signing (auto-generates if omitted)
@@ -1427,6 +1433,87 @@ export async function runCli(args: string[]): Promise<number> {
       return 0;
     } catch (err: unknown) {
       console.error(`SLSA export error: ${(err as Error).message}`);
+      return 1;
+    }
+  }
+
+  // 19. Command: client config <client> [options]
+  if (firstArg === 'client') {
+    const subAction = args[1];
+    if (subAction !== 'config') {
+      console.error(
+        'Unknown client sub-command. Usage: evidence-mcp client config <claude|cursor|gemini|vscode-cline> [options]'
+      );
+      return 1;
+    }
+
+    const rawClient = args[2]?.toLowerCase();
+    if (!rawClient || !['claude', 'cursor', 'gemini', 'vscode-cline'].includes(rawClient)) {
+      console.error('Error: target client must be one of: claude, cursor, gemini, vscode-cline');
+      console.error(
+        'Usage: evidence-mcp client config <client> [--write] [--path <filePath>] [--server-name <name>] [--global-bin] [--workspace <path>]'
+      );
+      return 1;
+    }
+
+    const client = rawClient as SupportedMcpClient;
+    let write = false;
+    let targetPath: string | undefined;
+    let serverName = 'evidence';
+    let useGlobalBinary = false;
+    let workspace: string | undefined;
+
+    for (let i = 3; i < args.length; i++) {
+      if (args[i] === '--write') {
+        write = true;
+      } else if ((args[i] === '--path' || args[i] === '-p') && args[i + 1]) {
+        targetPath = args[++i];
+      } else if (args[i] === '--server-name' && args[i + 1]) {
+        serverName = args[++i];
+      } else if (args[i] === '--global-bin') {
+        useGlobalBinary = true;
+      } else if ((args[i] === '--workspace' || args[i] === '-w') && args[i + 1]) {
+        workspace = args[++i];
+      }
+    }
+
+    try {
+      if (write) {
+        const writeRes = await writeClientConfig({
+          client,
+          workspacePath: workspace,
+          serverName,
+          useGlobalBinary,
+          targetPath,
+        });
+
+        console.log(`\nMCP Client Configuration Written`);
+        console.log('='.repeat(80));
+        console.log(`Client:          ${writeRes.client}`);
+        console.log(`Server Name:     ${writeRes.serverName}`);
+        console.log(`Config File:     ${writeRes.writtenToPath}`);
+        console.log(`Merged Existing: ${writeRes.mergedWithExisting ? 'YES' : 'NO (Created New)'}`);
+        console.log(`Total Servers:   ${writeRes.totalServersInFile}`);
+        console.log('='.repeat(80) + '\n');
+        return 0;
+      }
+
+      const configRes = generateClientConfig({
+        client,
+        workspacePath: workspace,
+        serverName,
+        useGlobalBinary,
+      });
+
+      console.log(`\nMCP Client Configuration Snippet: ${configRes.client}`);
+      console.log('='.repeat(80));
+      console.log(`Target Path: ${configRes.targetConfigPath}`);
+      console.log('='.repeat(80));
+      console.log(JSON.stringify(configRes.configSnippet, null, 2));
+      console.log('\nTip: Run with --write to automatically merge this snippet into the target config file.\n');
+      return 0;
+    } catch (err: unknown) {
+      console.error(`Client config error: ${(err as Error).message}`);
       return 1;
     }
   }

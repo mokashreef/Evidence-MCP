@@ -33,6 +33,7 @@ import { registerTrustedAgent, revokeTrustedAgent, listTrustedAgents } from './r
 import { captureWorkspaceSbom } from './sbom.js';
 import { notarizeEvidenceBundle } from './notary.js';
 import { generateSlsaProvenance } from './slsa.js';
+import { generateClientConfig, writeClientConfig } from './client-config.js';
 import { EvidencePolicy } from './types.js';
 
 export function createEvidenceServer(): McpServer {
@@ -1467,6 +1468,71 @@ export function createEvidenceServer(): McpServer {
         return {
           isError: true,
           content: [{ type: 'text', text: `Failed to export SLSA provenance: ${message}` }],
+        };
+      }
+    }
+  );
+
+  // 23. generate_client_config
+  server.tool(
+    'generate_client_config',
+    'Generates or writes ready-to-paste MCP client configuration snippets for Claude Desktop, Cursor, Gemini, and VS Code Cline.',
+    {
+      client: z
+        .enum(['claude', 'cursor', 'gemini', 'vscode-cline'])
+        .describe('Target AI client application.'),
+      workspacePath: z.string().optional().describe('Optional workspace path to bind the server to.'),
+      serverName: z.string().default('evidence').describe('MCP server key name (default: "evidence").'),
+      useGlobalBinary: z
+        .boolean()
+        .default(false)
+        .describe('Use global "evidence-mcp" binary instead of node dist/cli.js.'),
+      write: z
+        .boolean()
+        .default(false)
+        .describe('Automatically write or merge into the client configuration file on disk.'),
+      outputPath: z.string().optional().describe('Custom file path to write the configuration to.'),
+    },
+    async ({ client, workspacePath, serverName, useGlobalBinary, write, outputPath }) => {
+      try {
+        if (write) {
+          const writeRes = await writeClientConfig({
+            client,
+            workspacePath,
+            serverName,
+            useGlobalBinary,
+            targetPath: outputPath,
+          });
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(writeRes, null, 2),
+              },
+            ],
+          };
+        }
+
+        const configRes = generateClientConfig({
+          client,
+          workspacePath,
+          serverName,
+          useGlobalBinary,
+        });
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(configRes, null, 2),
+            },
+          ],
+        };
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `Failed to generate client configuration: ${message}` }],
         };
       }
     }
