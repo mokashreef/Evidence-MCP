@@ -628,7 +628,7 @@ export function generateCycloneDxDocument(
         {
           vendor: 'Evidence MCP',
           name: 'evidence-mcp',
-          version: '1.4.0',
+          version: '1.5.0',
         },
       ],
       component: {

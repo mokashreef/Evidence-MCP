@@ -166,7 +166,7 @@ export async function generateSlsaProvenance(options: {
         builder: {
           id: builderId,
           version: {
-            'evidence-mcp': '1.4.0',
+            'evidence-mcp': '1.5.0',
           },
         },
         metadata: {

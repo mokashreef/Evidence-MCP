@@ -100,16 +100,16 @@ All data is stored locally in human-readable JSON files inside the workspace roo
 
 ---
 
-## Tools Catalog (v1.3.0)
+## Tools Catalog (v1.5.0)
 
-Evidence MCP provides twenty-two focused tools through the Model Context Protocol:
+Evidence MCP provides twenty-four focused tools through the Model Context Protocol:
 
 | Tool | Purpose | Key Inputs | Output |
 |---|---|---|---|
 | `create_evidence_bundle` | Initializes a new evidence bundle for a task | `task`, `workspacePath`, `metadata?`, `additionalWorkspaces?` | `bundleId`, initial status (`in_progress`) |
 | `register_workspace` | Dynamically binds a named monorepo package or secondary repository | `bundleId`, `name`, `path` | `workspaceName`, `workspacePath`, `allWorkspaces` |
 | `capture_git_evidence` | Safely records Git HEAD, branch, and status in targeted workspace | `bundleId`, `workspaceName?`, `workspacePath?` | `evidenceId`, `branch`, `headCommit`, `isClean` |
-| `capture_ast_evidence` | Extracts TypeScript/JavaScript/Python/Go/Rust/Java/C# AST symbols and semantic diffs | `bundleId`, `files`, `workspaceName?`, `compareWithGitHead?` | `astEvidence: [{ id, filePath, symbolsCount, hasSemanticChanges, isBreakingChange }]` |
+| `capture_ast_evidence` | Extracts multi-language AST symbols and semantic diffs via modular plugins | `bundleId`, `files`, `workspaceName?`, `compareWithGitHead?` | `astEvidence: [{ id, filePath, symbolsCount, hasSemanticChanges, isBreakingChange }]` |
 | `execute_verified_command` | Spawns an approved command in sandboxed runner with concurrency bounds | `bundleId`, `command`, `args?`, `cwd?`, `workspaceName?` | `evidenceId`, `exitCode`, `durationMs`, `provenance: server_executed` |
 | `record_command_result` | Logs agent-reported command execution result (provenance: agent_reported) | `bundleId`, `command`, `exitCode`, `stdout`, `stderr`, `workspaceName?` | `evidenceId`, `command`, `exitCode`, `provenance` |
 | `snapshot_files` | Computes SHA-256 and size for regular files inside workspace boundary | `bundleId`, `paths`, `workspaceName?` | `snapshots: [{ evidenceId, workspaceName, path, sha256 }]` |
@@ -128,6 +128,8 @@ Evidence MCP provides twenty-two focused tools through the Model Context Protoco
 | `capture_sbom_evidence` | Generates a verifiable CycloneDX v1.5 SBOM from manifests/lockfiles | `bundleId`, `workspaceName?`, `includeDevDependencies?`, `outputPath?` | `evidenceId`, `componentCount`, `bomDigest`, `licenseSummary` |
 | `notarize_evidence_bundle` | Anchors anonymized bundle SHA-256 digest to a remote transparency notary | `bundleId`, `notaryUrl`, `authToken?`, `timeoutMs?`, `allowPrivateNetwork?` | `receiptId`, `logIndex`, `merkleLeafHash`, `notaryKeyFingerprint` |
 | `export_slsa_provenance` | Generates and Ed25519-signs an in-toto v1 / SLSA v1.0 provenance envelope | `bundleId`, `builderId?`, `sign?`, `outputPath?` | `statementDigest`, `subjectCount`, `dependencyCount`, `provenance` |
+| `generate_client_config` | Generates MCP client configuration for Claude, Cursor, Gemini, or Cline | `client`, `write?`, `path?`, `serverName?`, `globalBin?`, `workspace?` | `client`, `configPath`, `snippet`, `written` |
+| `submit_rekor_entry` | Submits bundle attestation to Sigstore Rekor and verifies RFC 6962 proof | `bundleId`, `rekorUrl?`, `privateKeyPem?`, `allowPrivateNetwork?` | `entryUuid`, `logIndex`, `inclusionProof`, `verified` |
 
 ---
 
@@ -194,6 +196,9 @@ node dist/cli.js ast bundle_9a41f0bc src/index.ts src/utils.ts
 
 # Capture AST evidence for a specific monorepo package without Git HEAD diff:
 node dist/cli.js ast bundle_9a41f0bc src/types.ts --package backend --no-diff
+
+# List all registered AST language plugins and supported file extensions:
+node dist/cli.js ast --list-languages
 ```
 
 ### 8. Export Cryptographically Signed Verification Proofs
@@ -303,6 +308,27 @@ node dist/cli.js notarize bundle_9a41f0bc https://notary.example.com/v1/notarize
 node dist/cli.js slsa bundle_9a41f0bc --output ./artifacts/release.slsa.json
 ```
 
+### 20. MCP Client Configuration Generator
+```bash
+# Print configuration JSON snippet for Claude, Cursor, Gemini, or Cline:
+node dist/cli.js client config cursor
+
+# Automatically merge and write configuration directly to target client file:
+node dist/cli.js client config claude --write
+
+# Target Cline with a custom workspace path and global binary command:
+node dist/cli.js client config vscode-cline --write --workspace /path/to/project --global-bin
+```
+
+### 21. Sigstore Rekor Transparency Log Integration
+```bash
+# Submit bundle attestation to Sigstore Rekor and verify Merkle inclusion proof:
+node dist/cli.js rekor submit bundle_9a41f0bc
+
+# Audit an existing bundle against Rekor and verify offline RFC 6962 proofs:
+node dist/cli.js rekor verify bundle_9a41f0bc
+```
+
 > **Interactive Tutorial:** See [examples/multi-agent-consensus/TUTORIAL.md](examples/multi-agent-consensus/TUTORIAL.md) and run `npx tsx examples/multi-agent-consensus/orchestrate.ts` for a complete end-to-end 3-agent orchestration simulation.
 
 ### CI/CD Pipeline Integration (GitHub Actions)
@@ -311,7 +337,7 @@ Evidence MCP provides an official composite action (`action.yml`) for seamless G
 
 ```yaml
 - name: Verify Agent Evidence, Quorum & Compliance Policy
-  uses: mokashreef/Evidence-MCP@v1.4.0
+  uses: mokashreef/Evidence-MCP@v1.5.0
   with:
     bundle-id: ${{ env.BUNDLE_ID }}
     capture-sbom: 'true'
@@ -586,9 +612,13 @@ npm run build
 
 ---
 
-## Scope & Boundaries (v1.4.0)
+## Scope & Boundaries (v1.5.0)
 
-### Strictly In Scope for v1.4.0
+### Strictly In Scope for v1.5.0
+- Sigstore Rekor Transparency Log Integration (`submit_rekor_entry` tool, `evidence-mcp rekor submit|verify` CLI, `buildHashedRekordPayload`, `verifyRekorEntryReceipt`, and pure Node.js RFC 6962 Merkle tree inclusion proof verification `verifyRfc6962InclusionProof`) with policy enforcement (`policy.rekor.requireRekor`, `minRekorCount`, `allowedRekorLogIds`).
+- SLSA Provenance & SBOM Package Policy Rules (`EvidencePolicy.slsa` requiring provenance/signature/allowed builders, and `EvidencePolicy.sbom` requiring PURLs and prefix-matching for `blockedPackages`) with SARIF v2.1.0 and Markdown compliance mapping.
+- MCP Client Configuration Generator (`generate_client_config` tool and `evidence-mcp client config` CLI) with OS-aware path detection (`getDefaultConfigPath`) and atomic merging across Claude, Cursor, Gemini Code Assist, and Cline.
+- Modular AST Parser Plugin Bridge (`AstParserPlugin` registry with `registerAstPlugin`, `unregisterAstPlugin`, `listRegisteredAstPlugins`, and `evidence-mcp ast --list-languages` CLI discovery) supporting custom grammar extensions and priority overrides alongside built-in parsers (TypeScript, JavaScript, Python, Go, Rust, Java, C#, JSON).
 - Distributed Trusted Agent Key Registry (`register_trusted_agent` & `revoke_trusted_agent` tools, and `evidence-mcp registry` CLI) with active enforcement in verification, quorum, and policy checks (`requireTrustedRegistry`).
 - Remote transparency notary attestation (`notarize_evidence_bundle` tool, `evidence-mcp notarize` CLI, `verifyNotaryReceipt`, and policy `attestation.requireNotary` / `allowedNotaryFingerprints` / `minNotaryCount` multi-notary quorum) anchoring anonymized SHA-256 digests with zero source code leakage.
 - Signed CycloneDX v1.5 SBOM supply-chain evidence (`capture_sbom_evidence` tool, `evidence-mcp sbom` CLI) across **npm, Go, Rust, and Python** ecosystems with polyglot secondary manifest verification (`additionalManifests`), `sbom` policy compliance rules, and attestation digest binding.
@@ -627,14 +657,14 @@ npm run build
 - Deterministic canonical payload serialization (`getCanonicalPayload`) for tamper resistance.
 - Cryptographic signature re-verification in `verify_evidence_bundle` and CLI `verify`.
 - Local file persistence under `.evidence-mcp/bundles/`, `.evidence-mcp/proofs/`, `.evidence-mcp/registry/`, and key pairs under `.evidence-mcp/keys/`.
-- Standalone CLI interface (`verify`, `list`, `report`, `sign`, `exec`, `workspace`, `ast`, `proof`, `replay`, `endorse`, `quorum`, `summary`, `policy`, `webhook`, `registry`, `init`, `sbom`, `notarize`, `slsa`) with CI exit codes.
+- Standalone CLI interface (`verify`, `list`, `report`, `sign`, `exec`, `workspace`, `ast`, `proof`, `replay`, `endorse`, `quorum`, `summary`, `policy`, `webhook`, `registry`, `init`, `sbom`, `notarize`, `slsa`, `client`, `rekor`) with CI exit codes.
 - Interactive, responsive, offline-safe HTML report generation with multi-workspace tables, AST symbol catalogs, SBOM supply-chain summaries, peer endorsements, and badges.
 - Mandatory evidence-linked assertions.
-- Live verification of file hashes, Git status, AST symbols, SBOM manifests, notary receipts, and cryptographic signatures.
+- Live verification of file hashes, Git status, AST symbols, SBOM manifests, notary receipts, Rekor log proofs, and cryptographic signatures.
 
-### Out of Scope for v1.4.0
+### Out of Scope for v1.5.0
 - **Direct Arbitrary Shell Command Execution:** Raw shell strings (e.g. `bash -c "..."`) without security boundaries are strictly rejected.
-- **Remote Publishing / Cloud Source Uploads:** Evidence bundles stay local to the workspace. Remote notary endpoints receive only cryptographic bundle SHA-256 digests (`bundleDigest`) — never source code or file contents.
+- **Remote Publishing / Cloud Source Uploads:** Evidence bundles stay local to the workspace. Remote notary and Rekor endpoints receive only cryptographic bundle SHA-256 digests (`bundleDigest`) — never source code or file contents.
 
 ---
 
@@ -651,8 +681,9 @@ npm run build
 - **v1.1 (Completed):** Python AST symbol parsing, runner concurrency semaphore, `evidence-mcp init` wizard, license compliance policy rules, multi-agent consensus tutorial, and enforced registry verification.
 - **v1.2 (Completed):** Structural AST parsers & semantic diffing for Go & Rust, and SARIF v2.1.0 report export for GitHub Code Scanning.
 - **v1.3 (Completed):** Java & C# structural AST parsing, signed CycloneDX v1.5 SBOM integration, and remote transparency notary attestations.
-- **v1.4 (Current Release):** Multi-notary threshold quorum policies (`minNotaryCount`), SSRF-hardened networking with exponential backoff, multi-ecosystem SBOM scanning (npm, Go, Rust, Python), SLSA v1.0 provenance attestation export, and automated release/npm publishing workflow.
-- **v1.5:** Tree-sitter / WASM AST plugin bridges, native Sigstore/Rekor transparency log adapter, and real-time MCP client integration templates.
+- **v1.4 (Completed):** Multi-notary threshold quorum policies (`minNotaryCount`), SSRF-hardened networking with exponential backoff, multi-ecosystem SBOM scanning (npm, Go, Rust, Python), SLSA v1.0 provenance attestation export, and automated release/npm publishing workflow.
+- **v1.5 (Current Release):** Sigstore Rekor transparency log integration & RFC 6962 inclusion proof verification, SLSA & SBOM package policy enforcement rules, MCP client config generator for Claude/Cursor/Gemini/Cline, and modular AST parser plugin bridge with CLI discovery.
+- **v1.6:** Distributed multi-log consensus auditing, WebAssembly sandboxed parser execution, and interactive terminal dashboard UI.
 
 ---
 
