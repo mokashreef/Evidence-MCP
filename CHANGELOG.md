@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-11-14
+
+### Added
+- **Sigstore Rekor Transparency Log Integration & RFC 6962 Verification (`src/rekor.ts`, PR #43):**
+  - Integrated public and private Sigstore Rekor transparency logs with pure Node.js RFC 6962 Merkle tree inclusion proof verification (`verifyRfc6962InclusionProof`) and signed log root auditing.
+  - Implemented `buildHashedRekordPayload`, `submitRekorLogEntry`, and `verifyRekorEntryReceipt` with built-in SSRF protection via `validateHttpUrl`.
+  - Added policy enforcement rules (`policy.rekor.requireRekor`, `minRekorCount`, `allowedRekorLogIds`).
+  - Added MCP Tool 24 `submit_rekor_entry` and CLI commands `evidence-mcp rekor submit` and `evidence-mcp rekor verify`.
+- **SLSA Provenance & SBOM Package Policy Enforcement (`src/policy.ts`, `src/types.ts`, PR #41):**
+  - Extended `EvidencePolicy.slsa` with rules: `requireProvenance`, `requireSignature`, `allowedBuilderIds`, and `minDependencies`.
+  - Extended `EvidencePolicy.sbom` with `requirePurls` and prefix-matching for `blockedPackages` (e.g. `pkg:npm/evil-*` or `evil-pkg`).
+  - Automatically bound generated SLSA provenance statements directly to `EvidenceBundle.slsaProvenance`.
+  - Integrated policy failures into SARIF v2.1.0 and Markdown reporting rules.
+- **MCP Client Configuration Generator (`src/client-config.ts`, PR #42):**
+  - Added zero-dependency configuration generator supporting Claude Desktop (`claude`), Cursor (`cursor`), Gemini Code Assist (`gemini`), and Cline (`vscode-cline`).
+  - Implemented OS-aware standard configuration path resolution (`getDefaultConfigPath`) across Windows, macOS, and Linux.
+  - Implemented non-destructive JSON merging and atomic writing (`writeClientConfig`).
+  - Added MCP Tool 23 `generate_client_config` and CLI command `evidence-mcp client config <client> [--write] [--global-bin] [--workspace <path>]`.
+- **Modular AST Parser Plugin Bridge (`src/ast.ts`, `src/types.ts`, PR #44):**
+  - Introduced extensible AST parser plugin architecture (`AstParserPlugin`) with global registry management (`registerAstPlugin`, `unregisterAstPlugin`, `getAstPluginForFile`, `getAstPluginForLanguage`, `listRegisteredAstPlugins`, `resetAstPluginRegistry`).
+  - Converted all 8 built-in language parsers (`typescript`, `javascript`, `python`, `go`, `rust`, `java`, `csharp`, `json`) to default registered plugins.
+  - Added CLI discovery command `evidence-mcp ast --list-languages` to inspect registered language plugins and file extensions.
+  - Expanded total test suite to 230 passing tests across 25 test files (100% green).
+
 ## [1.4.0] - 2026-11-12
 
 ### Added

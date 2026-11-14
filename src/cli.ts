@@ -30,7 +30,7 @@ import {
 import path from 'node:path';
 import fs from 'node:fs';
 
-const VERSION = '1.4.0';
+const VERSION = '1.5.0';
 
 export function printHelp(): void {
   console.log(`
