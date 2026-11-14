@@ -97,6 +97,14 @@ export interface AstEvidence {
   diff?: AstSemanticDiff;
 }
 
+export interface AstParserPlugin {
+  language: string;
+  extensions: string[];
+  parseSymbols(code: string, filePath?: string): AstSymbol[];
+  description?: string;
+  priority?: number;
+}
+
 export interface Assertion {
   id: string;
   claim: string;

@@ -6,39 +6,97 @@ import {
   AstSemanticDiff,
   AstSymbol,
   AstSymbolKind,
+  AstParserPlugin,
 } from './types.js';
 import { assertSafeFilePath } from './security.js';
 import { getFileContentAtGitHead } from './git.js';
 import { generateId } from './storage.js';
 
-export function detectLanguage(filePath: string): string {
-  const ext = path.extname(filePath).toLowerCase();
-  switch (ext) {
-    case '.ts':
-    case '.tsx':
-    case '.mts':
-    case '.cts':
-      return 'typescript';
-    case '.js':
-    case '.jsx':
-    case '.mjs':
-    case '.cjs':
-      return 'javascript';
-    case '.json':
-      return 'json';
-    case '.py':
-      return 'python';
-    case '.go':
-      return 'go';
-    case '.rs':
-      return 'rust';
-    case '.java':
-      return 'java';
-    case '.cs':
-      return 'csharp';
-    default:
-      return 'other';
+const registeredPlugins: AstParserPlugin[] = [];
+
+/**
+ * Registers an AST language parser plugin into the global registry.
+ * Higher priority plugins take precedence.
+ */
+export function registerAstPlugin(plugin: AstParserPlugin): void {
+  if (!plugin || !plugin.language || !Array.isArray(plugin.extensions)) {
+    throw new Error('Invalid AST plugin: language and extensions array are required.');
   }
+
+  // Remove existing plugin for this exact language identifier if any
+  unregisterAstPlugin(plugin.language);
+
+  // Normalize extensions with leading dot and lowercase
+  const normalizedExts = plugin.extensions.map((ext) =>
+    ext.startsWith('.') ? ext.toLowerCase() : `.${ext.toLowerCase()}`
+  );
+
+  const normalizedPlugin: AstParserPlugin = {
+    ...plugin,
+    language: plugin.language.toLowerCase(),
+    extensions: normalizedExts,
+    priority: plugin.priority || 0,
+  };
+
+  registeredPlugins.push(normalizedPlugin);
+  // Sort descending by priority
+  registeredPlugins.sort((a, b) => (b.priority || 0) - (a.priority || 0));
+}
+
+/**
+ * Unregisters an AST parser plugin by language name.
+ */
+export function unregisterAstPlugin(language: string): boolean {
+  if (!language) return false;
+  const target = language.toLowerCase();
+  const idx = registeredPlugins.findIndex((p) => p.language === target);
+  if (idx !== -1) {
+    registeredPlugins.splice(idx, 1);
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Returns the registered AST parser plugin for a given file path based on its extension.
+ */
+export function getAstPluginForFile(filePath: string): AstParserPlugin | undefined {
+  if (!filePath) return undefined;
+  const ext = path.extname(filePath).toLowerCase();
+  if (!ext) return undefined;
+  return registeredPlugins.find((p) => p.extensions.includes(ext));
+}
+
+/**
+ * Returns the registered AST parser plugin for a given canonical language name.
+ */
+export function getAstPluginForLanguage(language: string): AstParserPlugin | undefined {
+  if (!language) return undefined;
+  const target = language.toLowerCase();
+  return registeredPlugins.find((p) => p.language === target);
+}
+
+/**
+ * Lists all currently registered AST parser plugins.
+ */
+export function listRegisteredAstPlugins(): AstParserPlugin[] {
+  return [...registeredPlugins];
+}
+
+/**
+ * Resets the AST plugin registry to the default built-in language parsers.
+ */
+export function resetAstPluginRegistry(): void {
+  registeredPlugins.length = 0;
+  registerDefaultAstPlugins();
+}
+
+export function detectLanguage(filePath: string): string {
+  const plugin = getAstPluginForFile(filePath);
+  if (plugin) {
+    return plugin.language;
+  }
+  return 'other';
 }
 
 /**
@@ -215,35 +273,13 @@ function parseSingleParameter(paramStr: string): AstParameter {
 }
 
 /**
- * Parses source code into semantic AST symbols.
+ * Parses source code into semantic AST symbols using registered plugins.
  */
 export function parseSourceSymbols(sourceCode: string, filePath: string): AstSymbol[] {
-  const lang = detectLanguage(filePath);
-
-  if (lang === 'json') {
-    return parseJsonSymbols(sourceCode);
+  const plugin = getAstPluginForFile(filePath);
+  if (plugin) {
+    return plugin.parseSymbols(sourceCode, filePath);
   }
-
-  if (lang === 'typescript' || lang === 'javascript') {
-    return parseTsJsSymbols(sourceCode);
-  }
-
-  if (lang === 'python') {
-    return parsePythonSymbols(sourceCode);
-  }
-
-  if (lang === 'go') {
-    return parseGoSymbols(sourceCode);
-  }
-
-  if (lang === 'rust') {
-    return parseRustSymbols(sourceCode);
-  }
-
-  if (lang === 'java' || lang === 'csharp') {
-    return parseJvmClrSymbols(sourceCode, lang);
-  }
-
   return [];
 }
 
@@ -1426,3 +1462,82 @@ export async function captureFileAstEvidence(options: {
     diff,
   };
 }
+
+/**
+ * Registers all standard built-in language parser plugins.
+ */
+function registerDefaultAstPlugins(): void {
+  // 1. TypeScript & JavaScript
+  registerAstPlugin({
+    language: 'typescript',
+    extensions: ['.ts', '.tsx', '.mts', '.cts'],
+    description: 'TypeScript structural AST parser (functions, classes, interfaces, methods, types)',
+    priority: 10,
+    parseSymbols: (code) => parseTsJsSymbols(code),
+  });
+
+  registerAstPlugin({
+    language: 'javascript',
+    extensions: ['.js', '.jsx', '.mjs', '.cjs'],
+    description: 'JavaScript structural AST parser (functions, classes, methods)',
+    priority: 10,
+    parseSymbols: (code) => parseTsJsSymbols(code),
+  });
+
+  // 2. Python
+  registerAstPlugin({
+    language: 'python',
+    extensions: ['.py', '.pyw'],
+    description: 'Python structural AST parser (def functions, async def, class, methods)',
+    priority: 10,
+    parseSymbols: (code) => parsePythonSymbols(code),
+  });
+
+  // 3. Go
+  registerAstPlugin({
+    language: 'go',
+    extensions: ['.go'],
+    description: 'Go structural AST parser (func, type struct, type interface, methods)',
+    priority: 10,
+    parseSymbols: (code) => parseGoSymbols(code),
+  });
+
+  // 4. Rust
+  registerAstPlugin({
+    language: 'rust',
+    extensions: ['.rs'],
+    description: 'Rust structural AST parser (pub fn, struct, enum, trait, impl methods)',
+    priority: 10,
+    parseSymbols: (code) => parseRustSymbols(code),
+  });
+
+  // 5. Java
+  registerAstPlugin({
+    language: 'java',
+    extensions: ['.java'],
+    description: 'Java structural AST parser (classes, interfaces, records, enums, methods)',
+    priority: 10,
+    parseSymbols: (code) => parseJvmClrSymbols(code, 'java'),
+  });
+
+  // 6. C#
+  registerAstPlugin({
+    language: 'csharp',
+    extensions: ['.cs'],
+    description: 'C# structural AST parser (classes, interfaces, structs, records, methods)',
+    priority: 10,
+    parseSymbols: (code) => parseJvmClrSymbols(code, 'csharp'),
+  });
+
+  // 7. JSON
+  registerAstPlugin({
+    language: 'json',
+    extensions: ['.json'],
+    description: 'JSON top-level structural object keys parser',
+    priority: 5,
+    parseSymbols: (code) => parseJsonSymbols(code),
+  });
+}
+
+// Auto-register built-in plugins at module load
+registerDefaultAstPlugins();

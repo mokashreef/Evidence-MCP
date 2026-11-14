@@ -6,7 +6,7 @@ import { verifyEvidenceBundle } from './verifier.js';
 import { exportEvidenceReport } from './reporter.js';
 import { signEvidenceBundle } from './attestation.js';
 import { executeSandboxedCommand } from './runner.js';
-import { captureFileAstEvidence } from './ast.js';
+import { captureFileAstEvidence, listRegisteredAstPlugins } from './ast.js';
 import { createVerificationProof, verifyProofSignature, replayEvidenceBundle } from './proof.js';
 import { createPeerEndorsement, checkBundleQuorum } from './consensus.js';
 import { generateGitHubStepSummary, writeToGitHubStepSummary } from './github-summary.js';
@@ -462,6 +462,20 @@ export async function runCli(args: string[]): Promise<number> {
 
   // 7. Command: ast <bundleId> <files...> [options]
   if (firstArg === 'ast') {
+    if (args[1] === '--list-languages' || args.includes('--list-languages')) {
+      const plugins = listRegisteredAstPlugins();
+      console.log(`\nRegistered AST Parser Plugins (${plugins.length}):`);
+      console.log('='.repeat(80));
+      for (const p of plugins) {
+        console.log(`- ${p.language.padEnd(12)} (extensions: ${p.extensions.join(', ')})`);
+        if (p.description) {
+          console.log(`  Description: ${p.description}`);
+        }
+      }
+      console.log('='.repeat(80) + '\n');
+      return 0;
+    }
+
     const bundleId = args[1];
     if (!bundleId) {
       console.error('Error: bundleId is required.\nUsage: evidence-mcp ast <bundleId> <files...> [options]');
