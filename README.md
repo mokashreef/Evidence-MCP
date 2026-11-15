@@ -4,6 +4,7 @@
 > Replace unverified agent text claims ("Tests pass", "Bug fixed") with structured, verifiable local evidence.
 
 [![CI](https://github.com/mokashreef/Evidence-MCP/actions/workflows/ci.yml/badge.svg)](https://github.com/mokashreef/Evidence-MCP/actions/workflows/ci.yml)
+[![Website](https://img.shields.io/badge/Website-GitHub%20Pages-cyan.svg)](https://mokashreef.github.io/Evidence-MCP/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue.svg)](https://www.typescriptlang.org/)
 [![Model Context Protocol](https://img.shields.io/badge/MCP-1.32-green.svg)](https://modelcontextprotocol.io/)
