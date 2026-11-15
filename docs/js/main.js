@@ -1,6 +1,7 @@
 /**
  * Evidence MCP — Official Landing Page JavaScript
- * Bilingual Engine (English & Arabic), Interactive 24 Tools Catalog & Client Config Tabs
+ * Bilingual Engine (English & Arabic), Interactive 24 Tools Catalog, Client Config Tabs,
+ * and Mobile Drawer Navigation
  */
 
 // 1. Tool Catalog Data (24 Tools)
@@ -259,7 +260,7 @@ const CLIENT_CONFIGS = {
   }
 };
 
-// 3. Bilingual Dictionary
+// 3. Bilingual Dictionary (Completely Emoji-Free)
 const I18N = {
   en: {
     site_title: "Evidence MCP — Cryptographic Proof of Work for AI Coding Agents",
@@ -268,7 +269,7 @@ const I18N = {
     nav_tools: "24 Tools",
     nav_clients: "Client Setup",
     nav_quickstart: "Quickstart",
-    badge_hero: "⚡ Open Protocol for Verifiable AI Coding Agents",
+    badge_hero: "Open Protocol for Verifiable AI Coding Agents",
     hero_title: 'Don\'t Just Trust AI Agents. <span class="gradient-text">Cryptographically Verify Them.</span>',
     hero_desc: "Evidence MCP is the zero-dependency Model Context Protocol server that captures tamper-proof engineering evidence: Ed25519 attestations, AST semantic diffs, CycloneDX SBOMs, SLSA v1.0 provenance, and Sigstore Rekor transparency logs.",
     btn_quickstart: "Quickstart Guide",
@@ -358,7 +359,8 @@ const I18N = {
     footer_col_standards: "Standards",
     footer_copy: "© 2026 Evidence MCP. Released under the MIT License.",
     copy_btn: "Copy",
-    copied_btn: "Copied!"
+    copied_btn: "Copied!",
+    nav_home: "Home"
   },
   ar: {
     site_title: "Evidence MCP — بروتوكول الأدلة المشفرة للوكلاء الذكية البرمجية",
@@ -367,7 +369,7 @@ const I18N = {
     nav_tools: "الـ 24 أداة",
     nav_clients: "إعداد العملاء",
     nav_quickstart: "البدء السريع",
-    badge_hero: "⚡ بروتوكول مفتوح وموثوق لوكلاء البرمجة الذكية",
+    badge_hero: "بروتوكول مفتوح وموثوق لوكلاء البرمجة الذكية",
     hero_title: 'لا تكتفِ بالثقة بالوكيل الذكي. <span class="gradient-text">تحقق منه تشفيرياً برهانياً.</span>',
     hero_desc: "بروتوكول Evidence MCP هو خادم MCP مفتوح وخالٍ تماماً من الاعتماديات الخارجية، يلتقط حزم أدلة هندسية غير قابلة للتلاعب: توقيعات Ed25519، وفروقات AST النحوية، وجرد برمجيات CycloneDX، وإثباتات SLSA v1.0، وسجلات شفافية Rekor.",
     btn_quickstart: "دليل البدء السريع",
@@ -457,7 +459,8 @@ const I18N = {
     footer_col_standards: "المعايير",
     footer_copy: "© 2026 Evidence MCP. مرخص بموجب رخصة MIT.",
     copy_btn: "نسخ",
-    copied_btn: "تم النسخ!"
+    copied_btn: "تم النسخ!",
+    nav_home: "الرئيسية"
   }
 };
 
@@ -473,6 +476,8 @@ document.addEventListener('DOMContentLoaded', () => {
   setupToolsFilter();
   setupClientTabs();
   setupCopyButtons();
+  setupMobileDrawer();
+  setupMobileBottomNav();
   applyLanguage(currentLang);
   renderTools();
   renderClientTab(currentClient);
@@ -506,11 +511,13 @@ function applyLanguage(lang) {
     }
   });
 
-  // Update Lang toggle button text
-  const langBtn = document.getElementById('lang-toggle-btn');
-  if (langBtn) {
-    langBtn.innerHTML = isRtl ? '🇺🇸 English' : '🇸🇦 العربية';
-  }
+  // Update Lang toggle button (Pure SVG + text, ZERO emojis)
+  const langText = isRtl ? 'English' : 'العربية';
+  const globeSvg = `<svg class="lang-globe-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>`;
+  
+  document.querySelectorAll('.lang-toggle').forEach(btn => {
+    btn.innerHTML = `${globeSvg}<span>${langText}</span>`;
+  });
 
   // Re-render dynamic components
   renderTools();
@@ -519,13 +526,54 @@ function applyLanguage(lang) {
 
 // Setup Language Toggle
 function setupLanguageToggle() {
-  const langBtn = document.getElementById('lang-toggle-btn');
-  if (langBtn) {
-    langBtn.addEventListener('click', () => {
+  document.querySelectorAll('.lang-toggle').forEach(btn => {
+    btn.addEventListener('click', () => {
       const newLang = currentLang === 'en' ? 'ar' : 'en';
       applyLanguage(newLang);
     });
+  });
+}
+
+// Setup Mobile Navigation Drawer
+function setupMobileDrawer() {
+  const toggleBtn = document.getElementById('mobile-menu-toggle');
+  const closeBtn = document.getElementById('mobile-drawer-close');
+  const drawer = document.getElementById('mobile-nav-drawer');
+  const backdrop = document.getElementById('mobile-nav-backdrop');
+
+  if (!drawer || !backdrop) return;
+
+  function openDrawer() {
+    drawer.classList.add('open');
+    backdrop.classList.add('open');
+    document.body.style.overflow = 'hidden';
   }
+
+  function closeDrawer() {
+    drawer.classList.remove('open');
+    backdrop.classList.remove('open');
+    document.body.style.overflow = '';
+  }
+
+  if (toggleBtn) toggleBtn.addEventListener('click', openDrawer);
+  if (closeBtn) closeBtn.addEventListener('click', closeDrawer);
+  if (backdrop) backdrop.addEventListener('click', closeDrawer);
+
+  // Close drawer when clicking any link inside it
+  drawer.querySelectorAll('.drawer-link').forEach(link => {
+    link.addEventListener('click', closeDrawer);
+  });
+}
+
+// Setup Mobile Bottom Navigation Highlight
+function setupMobileBottomNav() {
+  const bottomItems = document.querySelectorAll('.bottom-bar-item');
+  bottomItems.forEach(item => {
+    item.addEventListener('click', () => {
+      bottomItems.forEach(i => i.classList.remove('active'));
+      item.classList.add('active');
+    });
+  });
 }
 
 // Setup Tools Filtering & Search
@@ -622,21 +670,22 @@ function renderClientTab(clientKey) {
 // Setup Copy Buttons
 function setupCopyButtons() {
   document.addEventListener('click', (e) => {
-    if (e.target && e.target.classList.contains('copy-btn')) {
-      const targetId = e.target.getAttribute('data-target');
+    const btn = e.target.closest('.copy-btn');
+    if (btn) {
+      const targetId = btn.getAttribute('data-target');
       const targetEl = document.getElementById(targetId);
       if (targetEl) {
         const text = targetEl.textContent || targetEl.innerText;
         navigator.clipboard.writeText(text).then(() => {
           const dict = I18N[currentLang];
-          const originalText = e.target.textContent;
-          e.target.textContent = dict.copied_btn;
-          e.target.style.background = 'rgba(16, 185, 129, 0.3)';
-          e.target.style.color = 'var(--accent-emerald)';
+          const originalText = btn.textContent;
+          btn.textContent = dict.copied_btn;
+          btn.style.background = 'rgba(16, 185, 129, 0.3)';
+          btn.style.color = 'var(--accent-emerald)';
           setTimeout(() => {
-            e.target.textContent = dict.copy_btn;
-            e.target.style.background = '';
-            e.target.style.color = '';
+            btn.textContent = dict.copy_btn;
+            btn.style.background = '';
+            btn.style.color = '';
           }, 2000);
         });
       }
