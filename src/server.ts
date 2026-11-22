@@ -35,6 +35,7 @@ import { notarizeEvidenceBundle } from './notary.js';
 import { generateSlsaProvenance } from './slsa.js';
 import { generateClientConfig, writeClientConfig } from './client-config.js';
 import { submitRekorLogEntry } from './rekor.js';
+import { getWorkspaceDashboard } from './dashboard.js';
 import { EvidencePolicy } from './types.js';
 
 export function createEvidenceServer(): McpServer {
@@ -1589,6 +1590,41 @@ export function createEvidenceServer(): McpServer {
         return {
           isError: true,
           content: [{ type: 'text', text: `Failed to submit Rekor log entry: ${message}` }],
+        };
+      }
+    }
+  );
+
+  // 25. get_workspace_dashboard
+  server.tool(
+    'get_workspace_dashboard',
+    'Generates a comprehensive security, cryptographic attestation, compliance, and evidence audit dashboard for the workspace.',
+    {
+      workspacePath: z.string().optional().describe('Workspace directory to audit (defaults to server workspace).'),
+      format: z.enum(['json', 'text']).default('json').describe('Output representation format ("json" or "text", default: "json").'),
+      noColor: z.boolean().default(false).describe('Disable ANSI colors when format is "text" (default: false).'),
+    },
+    async ({ workspacePath, format, noColor }) => {
+      try {
+        const res = await getWorkspaceDashboard({
+          workspacePath,
+          format,
+          noColor,
+        });
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: res.formatted,
+            },
+          ],
+        };
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `Failed to generate workspace dashboard: ${message}` }],
         };
       }
     }

@@ -101,9 +101,9 @@ All data is stored locally in human-readable JSON files inside the workspace roo
 
 ---
 
-## Tools Catalog (v1.5.0)
+## Tools Catalog (v1.6.0)
 
-Evidence MCP provides twenty-four focused tools through the Model Context Protocol:
+Evidence MCP provides twenty-five focused tools through the Model Context Protocol:
 
 | Tool | Purpose | Key Inputs | Output |
 |---|---|---|---|
@@ -131,6 +131,7 @@ Evidence MCP provides twenty-four focused tools through the Model Context Protoc
 | `export_slsa_provenance` | Generates and Ed25519-signs an in-toto v1 / SLSA v1.0 provenance envelope | `bundleId`, `builderId?`, `sign?`, `outputPath?` | `statementDigest`, `subjectCount`, `dependencyCount`, `provenance` |
 | `generate_client_config` | Generates MCP client configuration for Claude, Cursor, Gemini, or Cline | `client`, `write?`, `path?`, `serverName?`, `globalBin?`, `workspace?` | `client`, `configPath`, `snippet`, `written` |
 | `submit_rekor_entry` | Submits bundle attestation to Sigstore Rekor and verifies RFC 6962 proof | `bundleId`, `rekorUrl?`, `privateKeyPem?`, `allowPrivateNetwork?` | `entryUuid`, `logIndex`, `inclusionProof`, `verified` |
+| `get_workspace_dashboard` | Generates structured security, compliance, cryptographic, and evidence audit metrics for workspace | `workspacePath?`, `format?` (`json` \| `text`), `noColor?` | `workspacePath`, `summary`, `security`, `breakdowns`, `recentBundles`, formatted output |
 
 ---
 
@@ -328,6 +329,18 @@ node dist/cli.js rekor submit bundle_9a41f0bc
 
 # Audit an existing bundle against Rekor and verify offline RFC 6962 proofs:
 node dist/cli.js rekor verify bundle_9a41f0bc
+```
+
+### 22. Interactive Terminal Security & Evidence Dashboard
+```bash
+# Display rich ANSI terminal dashboard with bundle summaries, security metrics, and recent bundles:
+node dist/cli.js dashboard
+
+# Run with plain text output (no ANSI escape codes) for CI logs or files:
+node dist/cli.js dashboard --no-color
+
+# Output raw machine-readable JSON:
+node dist/cli.js dashboard --json
 ```
 
 > **Interactive Tutorial:** See [examples/multi-agent-consensus/TUTORIAL.md](examples/multi-agent-consensus/TUTORIAL.md) and run `npx tsx examples/multi-agent-consensus/orchestrate.ts` for a complete end-to-end 3-agent orchestration simulation.
@@ -658,7 +671,7 @@ npm run build
 - Deterministic canonical payload serialization (`getCanonicalPayload`) for tamper resistance.
 - Cryptographic signature re-verification in `verify_evidence_bundle` and CLI `verify`.
 - Local file persistence under `.evidence-mcp/bundles/`, `.evidence-mcp/proofs/`, `.evidence-mcp/registry/`, and key pairs under `.evidence-mcp/keys/`.
-- Standalone CLI interface (`verify`, `list`, `report`, `sign`, `exec`, `workspace`, `ast`, `proof`, `replay`, `endorse`, `quorum`, `summary`, `policy`, `webhook`, `registry`, `init`, `sbom`, `notarize`, `slsa`, `client`, `rekor`) with CI exit codes.
+- Standalone CLI interface (`verify`, `list`, `report`, `sign`, `exec`, `workspace`, `ast`, `proof`, `replay`, `endorse`, `quorum`, `summary`, `policy`, `webhook`, `registry`, `init`, `sbom`, `notarize`, `slsa`, `client`, `rekor`, `dashboard`) with CI exit codes.
 - Interactive, responsive, offline-safe HTML report generation with multi-workspace tables, AST symbol catalogs, SBOM supply-chain summaries, peer endorsements, and badges.
 - Mandatory evidence-linked assertions.
 - Live verification of file hashes, Git status, AST symbols, SBOM manifests, notary receipts, Rekor log proofs, and cryptographic signatures.
@@ -684,7 +697,7 @@ npm run build
 - **v1.3 (Completed):** Java & C# structural AST parsing, signed CycloneDX v1.5 SBOM integration, and remote transparency notary attestations.
 - **v1.4 (Completed):** Multi-notary threshold quorum policies (`minNotaryCount`), SSRF-hardened networking with exponential backoff, multi-ecosystem SBOM scanning (npm, Go, Rust, Python), SLSA v1.0 provenance attestation export, and automated release/npm publishing workflow.
 - **v1.5 (Current Release):** Sigstore Rekor transparency log integration & RFC 6962 inclusion proof verification, SLSA & SBOM package policy enforcement rules, MCP client config generator for Claude/Cursor/Gemini/Cline, and modular AST parser plugin bridge with CLI discovery.
-- **v1.6:** Distributed multi-log consensus auditing, WebAssembly sandboxed parser execution, and interactive terminal dashboard UI.
+- **v1.6:** Interactive terminal security & evidence dashboard UI (`get_workspace_dashboard` tool & `evidence-mcp dashboard` CLI), distributed multi-log consensus auditing, and WebAssembly sandboxed parser execution.
 
 ---
 
