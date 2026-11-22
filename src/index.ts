@@ -21,4 +21,5 @@ export * from './notary.js';
 export * from './slsa.js';
 export * from './client-config.js';
 export * from './rekor.js';
+export * from './dashboard.js';
 export { runCli, printHelp } from './cli.js';

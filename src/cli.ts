@@ -18,6 +18,7 @@ import { notarizeEvidenceBundle } from './notary.js';
 import { generateSlsaProvenance } from './slsa.js';
 import { generateClientConfig, writeClientConfig } from './client-config.js';
 import { submitRekorLogEntry, verifyRekorEntryReceipt, DEFAULT_REKOR_URL } from './rekor.js';
+import { getWorkspaceDashboard } from './dashboard.js';
 import {
   CommandEvidence,
   VerificationProof,
@@ -64,6 +65,7 @@ Usage:
   evidence-mcp client config <client> [options]     Generate or write MCP client config (claude|cursor|gemini|vscode-cline)
   evidence-mcp rekor submit <bundleId> [url]        Submit bundle attestation to Sigstore Rekor transparency log
   evidence-mcp rekor verify <bundleId> [options]    Verify attached Rekor entries and Merkle inclusion proofs
+  evidence-mcp dashboard [workspace] [options]      Display interactive terminal audit and security dashboard
   evidence-mcp init [options]                       Bootstrap evidence.policy.json configuration
   evidence-mcp --help, -h                           Show this help message
   evidence-mcp --version, -v                        Show version number
@@ -78,6 +80,7 @@ Options:
   --server-name <name>     Custom server entry name in config (default: "evidence")
   --format, -f <format>    Report format: markdown, json, html, or sarif (default: markdown)
   --output, -o <file>      Write exported report, proof, or summary directly to file
+  --no-color               Disable ANSI colors in terminal dashboard
   --key, -k <file>         Private key file for Ed25519 signing (auto-generates if omitted)
   --timeout <ms>           Execution timeout in milliseconds (default: 30000)
   --cwd <path>             Working directory relative to workspace root
@@ -1631,6 +1634,44 @@ export async function runCli(args: string[]): Promise<number> {
       return allValid ? 0 : 1;
     } catch (err: unknown) {
       console.error(`Rekor error: ${(err as Error).message}`);
+      return 1;
+    }
+  }
+
+  // dashboard
+  if (firstArg === 'dashboard') {
+    let workspace: string | undefined;
+    let format: 'json' | 'text' = 'text';
+    let noColor = false;
+
+    for (let i = 1; i < args.length; i++) {
+      if ((args[i] === '--workspace' || args[i] === '-w') && args[i + 1]) {
+        workspace = args[++i];
+      } else if ((args[i] === '--format' || args[i] === '-f') && args[i + 1]) {
+        const f = args[++i].toLowerCase();
+        if (f === 'json' || f === 'text') {
+          format = f;
+        }
+      } else if (args[i] === '--json') {
+        format = 'json';
+      } else if (args[i] === '--no-color') {
+        noColor = true;
+      } else if (!args[i].startsWith('-') && !workspace) {
+        workspace = args[i];
+      }
+    }
+
+    try {
+      const res = await getWorkspaceDashboard({
+        workspacePath: workspace,
+        format,
+        noColor,
+      });
+
+      console.log(res.formatted);
+      return 0;
+    } catch (err: unknown) {
+      console.error(`Dashboard error: ${(err as Error).message}`);
       return 1;
     }
   }

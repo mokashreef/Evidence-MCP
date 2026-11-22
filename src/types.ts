@@ -877,3 +877,59 @@ export const GenerateClientConfigSchema = z.object({
   write: z.boolean().default(false).describe('Write or merge directly into the client configuration file.'),
 });
 export type GenerateClientConfigInput = z.infer<typeof GenerateClientConfigSchema>;
+
+export interface WorkspaceDashboardSummary {
+  totalBundles: number;
+  verified: number;
+  stale: number;
+  failed: number;
+  inProgress: number;
+  unverifiable: number;
+}
+
+export interface WorkspaceDashboardSecurity {
+  signedAttestations: number;
+  notaryReceipts: number;
+  rekorEntries: number;
+  activeTrustedAgents: number;
+  revokedAgents: number;
+  activePolicies: boolean;
+}
+
+export interface WorkspaceDashboardBreakdowns {
+  totalAssertions: number;
+  totalSnapshots: number;
+  totalAstEvidence: number;
+  totalBreakingChanges: number;
+  totalCommandsExecuted: number;
+  totalSbomComponents: number;
+}
+
+export interface WorkspaceDashboardRecentBundle {
+  id: string;
+  task: string;
+  status: BundleStatus;
+  createdAt: string;
+  signed: boolean;
+  signerRole?: string;
+  notarized: boolean;
+  rekorAudit: boolean;
+  breakingChanges: number;
+  assertionCount: number;
+}
+
+export interface WorkspaceDashboardData {
+  workspacePath: string;
+  generatedAt: string;
+  summary: WorkspaceDashboardSummary;
+  security: WorkspaceDashboardSecurity;
+  breakdowns: WorkspaceDashboardBreakdowns;
+  recentBundles: WorkspaceDashboardRecentBundle[];
+}
+
+export const GetWorkspaceDashboardSchema = z.object({
+  workspacePath: z.string().optional().describe('Workspace directory to audit (defaults to server workspace).'),
+  format: z.enum(['json', 'text']).default('json').describe('Output representation format (default: "json").'),
+  noColor: z.boolean().default(false).describe('Disable ANSI colors when format is "text".'),
+});
+export type GetWorkspaceDashboardInput = z.infer<typeof GetWorkspaceDashboardSchema>;
